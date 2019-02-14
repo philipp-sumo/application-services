@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use config::PushConfiguration;
 use push_errors as error;
-use push_errors::ErrorKind::{AlreadyRegisteredError, CommunicationError};
+use push_errors::ErrorKind::{
+    AlreadyRegisteredError, CommunicationError, CommunicationServerError,
+};
 use reqwest::header;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -46,29 +48,26 @@ pub enum BroadcastValue {
     Nested(HashMap<String, BroadcastValue>),
 }
 
+/// A new communication link to the Autopush server
+///
 pub trait Connection {
     // get the connection UAID
     // TODO [conv]: reset_uaid(). This causes all known subscriptions to be reset.
 
     // send a new subscription request to the server, get back the server registration response.
-    fn subscribe(
-        &mut self,
-        channelid: &str,
-        vapid_public_key: Option<&str>,
-        registration_token: Option<&str>,
-    ) -> error::Result<RegisterResponse>;
+    fn subscribe(&mut self, channelid: &str) -> error::Result<RegisterResponse>;
 
     // Drop an endpoint
     fn unsubscribe(&self, channelid: Option<&str>) -> error::Result<bool>;
 
-    // Update an endpoint with new info
-    fn update(&self, new_token: &str) -> error::Result<bool>;
+    // Update the autopush server with the new native OS Messaging authorization token
+    fn update(&mut self, new_token: &str) -> error::Result<bool>;
 
-    // Get a list of server known channels. If it differs from what we have, reset the UAID, and refresh channels.
-    // Should be done once a day.
+    // Get a list of server known channels.
     fn channel_list(&self) -> error::Result<Vec<String>>;
 
-    // Verify that the known channel list matches up with the server list.
+    // Verify that the known channel list matches up with the server list. If this fails, regenerate endpoints.
+    // This should be performed once a day.
     fn verify_connection(&self, channels: &[String]) -> error::Result<bool>;
 
     // Regenerate the subscription info for all known, registered channelids
@@ -78,8 +77,6 @@ pub trait Connection {
     fn regenerate_endpoints(
         &mut self,
         channels: &[String],
-        vapid_public_key: Option<&str>,
-        registration_token: Option<&str>,
     ) -> error::Result<HashMap<String, String>>;
 
     // Add one or more new broadcast subscriptions.
@@ -92,6 +89,7 @@ pub trait Connection {
     //impl TODO: Handle an incoming Notification
 }
 
+/// Connect to the Autopush server via the HTTP interface
 pub struct ConnectHttp {
     options: PushConfiguration,
     client: reqwest::Client,
@@ -110,6 +108,10 @@ pub fn connect(options: PushConfiguration) -> error::Result<ConnectHttp> {
     };
     if options.socket_protocol.is_some() {
         return Err(error::ErrorKind::GeneralError("Unsupported".to_owned()).into());
+    };
+    if options.bridge_type.is_some() && options.registration_id.is_none() {
+        return Err(error::ErrorKind::GeneralError(
+            "Missing Registration ID, please register with OS first".to_owned()).into());
     };
     let connection = ConnectHttp {
         uaid: None,
@@ -131,44 +133,38 @@ pub fn connect(options: PushConfiguration) -> error::Result<ConnectHttp> {
 
 impl Connection for ConnectHttp {
     /// send a new subscription request to the server, get back the server registration response.
-    fn subscribe(
-        &mut self,
-        channelid: &str,
-        vapid_public_key: Option<&str>,
-        registration_token: Option<&str>,
-    ) -> error::Result<RegisterResponse> {
+    fn subscribe(&mut self, channelid: &str) -> error::Result<RegisterResponse> {
         // check that things are set
-        if self.options.http_protocol.is_none()
-            || self.options.bridge_type.is_none()
-            || registration_token.is_none()
-        {
+        if self.options.http_protocol.is_none() || self.options.bridge_type.is_none() {
             return Err(
                 CommunicationError("Bridge type or application id not set.".to_owned()).into(),
             );
         }
-
+        let options = self.options.clone();
         let url = format!(
             "{}://{}/v1/{}/{}/registration",
-            &self.options.http_protocol.clone().unwrap(),
-            &self.options.server_host,
-            &self.options.bridge_type.clone().unwrap(),
-            &self.options.application_id.clone().unwrap()
+            &options.http_protocol.unwrap(),
+            &options.server_host,
+            &options.bridge_type.unwrap(),
+            &options.sender_id
         );
         let mut body = HashMap::new();
-        body.insert("token", registration_token.unwrap());
-        body.insert("channelID", channelid);
-        if vapid_public_key.is_some() {
-            body.insert("key", vapid_public_key.unwrap());
+        body.insert("token", options.registration_id.unwrap());
+        body.insert("channelID", channelid.to_owned());
+        if self.options.vapid_key.is_some() {
+            body.insert("key", options.vapid_key.unwrap());
         }
         let mut request = match self.client.post(&url).json(&body).send() {
             Ok(v) => v,
             Err(e) => {
-                return Err(CommunicationError(format!("Could not fetch endpoint: {:?}", e)).into());
+                return Err(
+                    CommunicationServerError(format!("Could not fetch endpoint: {:?}", e)).into(),
+                );
             }
         };
         if request.status().is_server_error() {
             dbg!(request);
-            return Err(CommunicationError("Server error".to_string()).into());
+            return Err(CommunicationServerError("General Server error".to_string()).into());
         }
         if request.status().is_client_error() {
             dbg!(&request);
@@ -180,7 +176,9 @@ impl Connection for ConnectHttp {
         let response: Value = match request.json() {
             Ok(v) => v,
             Err(e) => {
-                return Err(CommunicationError(format!("Could not parse response: {:?}", e)).into());
+                return Err(
+                    CommunicationServerError(format!("Could not parse response: {:?}", e)).into(),
+                );
             }
         };
 
@@ -203,12 +201,13 @@ impl Connection for ConnectHttp {
         if self.uaid.is_none() {
             return Err(CommunicationError("No UAID set".into()).into());
         }
+        let options = self.options.clone();
         let mut url = format!(
             "{}://{}/v1/{}/{}/registration/{}",
-            &self.options.http_protocol.clone().unwrap(),
-            &self.options.server_host,
-            &self.options.bridge_type.clone().unwrap(),
-            &self.options.application_id.clone().unwrap(),
+            &options.http_protocol.unwrap(),
+            &options.server_host,
+            &options.bridge_type.unwrap(),
+            &options.sender_id,
             &self.uaid.clone().unwrap(),
         );
         if channel_id.is_some() {
@@ -224,24 +223,28 @@ impl Connection for ConnectHttp {
             .send()
         {
             Ok(_) => Ok(true),
-            Err(e) => Err(CommunicationError(format!("Could not unsubscribe: {:?}", e)).into()),
+            Err(e) => {
+                Err(CommunicationServerError(format!("Could not unsubscribe: {:?}", e)).into())
+            }
         }
     }
 
     /// Update the push server with the new OS push authorization token
-    fn update(&self, new_token: &str) -> error::Result<bool> {
+    fn update(&mut self, new_token: &str) -> error::Result<bool> {
         if self.auth.is_none() {
             return Err(CommunicationError("Connection is unauthorized".into()).into());
         }
         if self.uaid.is_none() {
             return Err(CommunicationError("No UAID set".into()).into());
         }
+        self.options.registration_id = Some(new_token.to_owned());
+        let options = self.options.clone();
         let url = format!(
             "{}://{}/v1/{}/{}/registration/{}",
-            &self.options.http_protocol.clone().unwrap(),
-            &self.options.server_host,
-            &self.options.bridge_type.clone().unwrap(),
-            &self.options.application_id.clone().unwrap(),
+            &options.http_protocol.unwrap(),
+            &options.server_host,
+            &options.bridge_type.unwrap(),
+            &options.sender_id,
             &self.uaid.clone().unwrap()
         );
         let mut body = HashMap::new();
@@ -257,7 +260,9 @@ impl Connection for ConnectHttp {
             .send()
         {
             Ok(_) => Ok(true),
-            Err(e) => Err(CommunicationError(format!("Could not update token: {:?}", e)).into()),
+            Err(e) => {
+                Err(CommunicationServerError(format!("Could not update token: {:?}", e)).into())
+            }
         }
     }
 
@@ -277,12 +282,13 @@ impl Connection for ConnectHttp {
         if self.uaid.is_none() {
             return Err(CommunicationError("No UAID set".into()).into());
         }
+        let options = self.options.clone();
         let url = format!(
             "{}://{}/v1/{}/{}/registration/{}/",
-            &self.options.http_protocol.clone().unwrap(),
-            &self.options.server_host,
-            &self.options.bridge_type.clone().unwrap(),
-            &self.options.application_id.clone().unwrap(),
+            &options.http_protocol.unwrap(),
+            &options.server_host,
+            &options.bridge_type.unwrap(),
+            &options.sender_id,
             &self.uaid.clone().unwrap(),
         );
         let mut request = match self
@@ -296,14 +302,16 @@ impl Connection for ConnectHttp {
         {
             Ok(v) => v,
             Err(e) => {
-                return Err(
-                    CommunicationError(format!("Could not fetch channel list: {:?}", e)).into(),
-                );
+                return Err(CommunicationServerError(format!(
+                    "Could not fetch channel list: {:?}",
+                    e
+                ))
+                .into());
             }
         };
         if request.status().is_server_error() {
             dbg!(request);
-            return Err(CommunicationError("Server error".to_string()).into());
+            return Err(CommunicationServerError("Server error".to_string()).into());
         }
         if request.status().is_client_error() {
             dbg!(&request);
@@ -312,7 +320,7 @@ impl Connection for ConnectHttp {
         let payload: Payload = match request.json() {
             Ok(p) => p,
             Err(e) => {
-                return Err(CommunicationError(format!(
+                return Err(CommunicationServerError(format!(
                     "Could not fetch channel_list: Bad Response {:?}",
                     e
                 ))
@@ -320,7 +328,7 @@ impl Connection for ConnectHttp {
             }
         };
         if payload.uaid != self.uaid.clone().unwrap() {
-            return Err(CommunicationError("Invalid Response from server".to_string()).into());
+            return Err(CommunicationServerError("Invalid Response from server".to_string()).into());
         }
         Ok(payload.channel_ids.clone())
     }
@@ -359,15 +367,13 @@ impl Connection for ConnectHttp {
     fn regenerate_endpoints(
         &mut self,
         channels: &[String],
-        vapid_public_key: Option<&str>,
-        registration_token: Option<&str>,
     ) -> error::Result<HashMap<String, String>> {
         if self.uaid.is_none() {
             return Err(CommunicationError("Connection uninitiated".to_owned()).into());
         }
         let mut results: HashMap<String, String> = HashMap::new();
         for channel in channels {
-            let info = self.subscribe(&channel, vapid_public_key, registration_token)?;
+            let info = self.subscribe(&channel)?;
             results.insert(channel.clone(), info.endpoint);
         }
         Ok(results)
@@ -418,16 +424,14 @@ mod test {
             let config = PushConfiguration {
                 http_protocol: Some("http".to_owned()),
                 server_host: server_address().to_string(),
-                application_id: Some(SENDER_ID.to_owned()),
+                sender_id: SENDER_ID.to_owned(),
                 bridge_type: Some("test".to_owned()),
+                registration_id: Some("SomeRegistrationValue".to_owned()),
                 ..Default::default()
             };
             let mut conn = connect(config).unwrap();
             let channel_id = String::from(hex::encode(crypto::get_bytes(16).unwrap()));
-            let registration_token = "SomeSytemProvidedRegistrationId";
-            let response = conn
-                .subscribe(&channel_id, None, Some(registration_token))
-                .unwrap();
+            let response = conn.subscribe(&channel_id).unwrap();
             ap_mock.assert();
             assert_eq!(response.uaid, DUMMY_UAID);
             // make sure we have stored the secret.
@@ -451,7 +455,8 @@ mod test {
             let config = PushConfiguration {
                 http_protocol: Some("http".to_owned()),
                 server_host: server_address().to_string(),
-                application_id: Some(SENDER_ID.to_owned()),
+                sender_id: SENDER_ID.to_owned(),
+                registration_id: Some("SomeRegistrationValue".to_owned()),
                 bridge_type: Some("test".to_owned()),
                 ..Default::default()
             };
@@ -476,8 +481,9 @@ mod test {
             let config = PushConfiguration {
                 http_protocol: Some("http".to_owned()),
                 server_host: server_address().to_string(),
-                application_id: Some(SENDER_ID.to_owned()),
+                sender_id: SENDER_ID.to_owned(),
                 bridge_type: Some("test".to_owned()),
+                registration_id: Some("SomeRegistrationValue".to_owned()),
                 ..Default::default()
             };
             let mut conn = connect(config).unwrap();
@@ -501,7 +507,8 @@ mod test {
             let config = PushConfiguration {
                 http_protocol: Some("http".to_owned()),
                 server_host: server_address().to_string(),
-                application_id: Some(SENDER_ID.to_owned()),
+                sender_id: SENDER_ID.to_owned(),
+                registration_id: Some("SomeRegistrationValue".to_owned()),
                 bridge_type: Some("test".to_owned()),
                 ..Default::default()
             };
@@ -510,6 +517,7 @@ mod test {
             conn.auth = Some(SECRET.to_owned());
             let response = conn.update("NewTokenValue").unwrap();
             ap_mock.assert();
+            assert!(conn.options.registration_id == Some("NewTokenValue".to_owned()));
             assert!(response);
         }
         // CHANNEL LIST
@@ -531,7 +539,8 @@ mod test {
             let config = PushConfiguration {
                 http_protocol: Some("http".to_owned()),
                 server_host: server_address().to_string(),
-                application_id: Some(SENDER_ID.to_owned()),
+                sender_id: SENDER_ID.to_owned(),
+                registration_id: Some("SomeRegistrationValue".to_owned()),
                 bridge_type: Some("test".to_owned()),
                 ..Default::default()
             };
