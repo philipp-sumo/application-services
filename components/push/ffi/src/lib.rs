@@ -46,6 +46,7 @@ pub unsafe extern "C" fn push_connection_new(
     bridge_type: *const c_char,
     registration_id: *const c_char,
     sender_id: *const c_char,
+    database_path: *const c_char,
     error: &mut ExternError,
 ) -> u64 {
     log::debug!("push_connection_new {} {} -> {} {}=>{}",
@@ -59,12 +60,14 @@ pub unsafe extern "C" fn push_connection_new(
         let bridge = ffi_support::opt_rust_string_from_c(bridge_type);
         let sender = ffi_support::rust_string_from_c(sender_id);
         let key = ffi_support::opt_rust_string_from_c(encryption_key);
+        let db_path = ffi_support::opt_rust_string_from_c(database_path);
         let config = PushConfiguration{
             server_host: host,
             http_protocol: protocol,
             bridge_type: bridge,
             registration_id: reg_id,
             sender_id: sender,
+            database_path: db_path,
             .. default()
         };
         connect(config)
@@ -88,8 +91,19 @@ pub unsafe extern "C" fn push_get_subscription_info(
         let subscription_key = crypto::generate_key().unwrap();
         let auth = base64::encode_config(
             &crypto::get_bytes(SER_AUTH_LENGTH), base64::URL_SAFE_NO_PAD);
-        let info = conn.subscribe(channel, key, reg_token).unwrap();
-        // TODO: store the channelid => auth + subscription_key
+        // Don't auto add the subscription to the db.
+        // (endpoint updates also call subscribe and should be lighter weight)
+        let info = conn.subscribe(channel).unwrap();
+        // store the channelid => auth + subscription_key
+        let mut record = PushRecord::new(
+            &info.uaid,
+            &channel,
+            &info.endpoint,
+            "",
+            subscription_key.clone());
+        record.app_server_key = options.vapid_key.clone();
+        record.native_id = Some(reg_token);
+        self.database.put_record(&record)?;
         let subscription_info = json!({
             "endpoint": info.endpoint
             "keys": {

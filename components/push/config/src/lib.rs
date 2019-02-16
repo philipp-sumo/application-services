@@ -32,6 +32,9 @@ pub struct PushConfiguration {
 
     // Sender/Application ID value
     pub sender_id: String,
+
+    // OS Path to the database
+    pub database_path: Option<String>,
 }
 
 impl Default for PushConfiguration {
@@ -49,6 +52,7 @@ impl Default for PushConfiguration {
             ping_interval: 1800,
             request_timeout: 1,
             sender_id: String::from(""),
+            database_path: None,
         }
     }
 }
