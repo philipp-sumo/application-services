@@ -61,13 +61,13 @@ internal interface LibPushFFI : Library {
             conn: RawPushConnection,
             channel_id: String,
             out_err: RustError.ByReference
-    ): Bool?
+    ): Boolean
 
     fun push_update(
             conn: RawPushConnection,
             new_token: String,
             out_err: RustError.ByReference
-    ): Bool?
+    ): Boolean
 
     fun push_verify_connection(
             conn: RawPushConnection,
@@ -83,4 +83,3 @@ internal interface LibPushFFI : Library {
 }
 
 class RawPushConnection : PointerType()
- 
