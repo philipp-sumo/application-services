@@ -64,7 +64,7 @@ open class RustError : Structure() {
     fun consumeErrorMessage(): String {
         val result = this.getMessage()
         if (this.message != null) {
-            LibPushFFI.INSTANCE.places_destroy_string(this.message!!);
+            LibPushFFI.INSTANCE.push_destroy_string(this.message!!);
             this.message = null
         }
         if (result == null) {

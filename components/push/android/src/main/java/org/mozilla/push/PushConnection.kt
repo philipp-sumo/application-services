@@ -32,7 +32,7 @@ class PushConnection(
     init {
         try {
             conn = rustCall { error ->
-                LibPushFFI.INSTANCE.push_connection_new(application_id, sender_id, server_host, socket_protocol, bridge_type)
+                LibPushFFI.INSTANCE.push_connection_new(application_id, sender_id, server_host, socket_protocol, bridge_type, error)
             }
         } catch (e: InternalPanic) {
             // Do local error handling?
@@ -52,7 +52,7 @@ class PushConnection(
     }
 
     override fun getSubscriptionInfo(
-        channelID: String,
+        channelID: String
         ): SubscriptionInfo {
         val json = rustCallForString { error ->
             LibPushFFI.INSTANCE.push_get_subscription_info(
@@ -61,7 +61,7 @@ class PushConnection(
         return SubscriptionInfo.fromJSON(json)
     }
 
-    override fun unsubscribe(channelID: String): Bool {
+    override fun unsubscribe(channelID: String): Boolean {
         val result = rustCall { error ->
             LibPushFFI.INSTANCE.push_unsubscribe(
                 this.conn!!, channelID, error)
@@ -69,7 +69,7 @@ class PushConnection(
         return result
     }
 
-    override fun update(new_token: String): Bool {
+    override fun update(new_token: String): Boolean {
         val result = rustCall { error ->
             LibPushFFI.INSTANCE.push_update(
                 this.conn!!, new_token, error)
@@ -84,7 +84,7 @@ class PushConnection(
             LibPushFFI.INSTANCE.push_verify_connection(
                 this.conn!!, error)
         }
-        if length(response) {
+        if (!response.isEmpty()) {
             val visited = JSONObject(response)
             for (key in js("Object").keys(visited)) {
                 newEndpoints.put(key, visited[key] as String)
@@ -112,7 +112,7 @@ class PushConnection(
         try {
             return cstring.getString(0, "utf8")
         } finally {
-            LibPushFFI.INSTANCE.places_destroy_string(cstring)
+            LibPushFFI.INSTANCE.push_destroy_string(cstring)
         }
     }
 }
@@ -123,15 +123,8 @@ class PushConnection(
  * probably want a way of sharing these.
  */
 
-class KeyInfo {
-    val auth: String,
-    val p256dh: String,
-}
-
-class SubscriptionInfo (
-    val endpoint: String,
-    val keys: KeyInfo,
-)
+class KeyInfo (val auth: String, val p256dh: String)
+class SubscriptionInfo (val endpoint: String, val keys: KeyInfo)
 
 /**
  * An API for interacting with Push.
@@ -144,7 +137,7 @@ interface PushAPI {
      * @return a Subscription Info structure
      */
     fun getSubscriptionInfo(
-        channelID: String,
+        channelID: String
     ): SubscriptionInfo
 
     /**
@@ -160,7 +153,7 @@ interface PushAPI {
      * @param registrationToken the new Native OS push registration ID.
      * @return bool
      */
-    fun update(registrationToken: String):Boolean
+    fun update(registrationToken: String): Boolean
 
     /**
      * Verifies the connection state. NOTE: If the internal check fails, 
