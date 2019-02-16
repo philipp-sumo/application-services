@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 pub use crate::http_client::ProfileResponse as Profile;
-use crate::{errors::*, http_client::Client, scopes, util, CachedResponse, FirefoxAccount};
+use crate::{errors::*, scopes, util, CachedResponse, FirefoxAccount};
 
 // A cached profile response is considered fresh for `PROFILE_FRESHNESS_THRESHOLD` ms.
 const PROFILE_FRESHNESS_THRESHOLD: u64 = 120000; // 2 minutes
@@ -19,8 +19,10 @@ impl FirefoxAccount {
             }
             etag = Some(cached_profile.etag.clone());
         }
-        let client = Client::new(&self.state.config);
-        match client.profile(&profile_access_token, etag)? {
+        match self
+            .client
+            .profile(&self.state.config, &profile_access_token, etag)?
+        {
             Some(response_and_etag) => {
                 if let Some(etag) = response_and_etag.etag {
                     self.profile_cache = Some(CachedResponse {
@@ -39,5 +41,96 @@ impl FirefoxAccount {
                 .into()),
             },
         }
+    }
+}
+
+#[cfg(not(feature = "browserid"))] // Otherwise gotta impl FxABrowserIDClient too...
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{http_client::*, oauth::AccessTokenInfo, Config};
+    use std::sync::Arc;
+
+    struct FakeClient {
+        pub is_success: bool, // Can't clone Result<T, error>.
+        pub profile_response: Option<ResponseAndETag<ProfileResponse>>,
+    }
+
+    impl FirefoxAccount {
+        fn add_token(&mut self, scope: &str, token_info: AccessTokenInfo) {
+            self.access_token_cache
+                .insert(scope.to_string(), token_info);
+        }
+    }
+
+    impl FxAClient for FakeClient {
+        fn oauth_token_with_code(
+            &self,
+            _: &Config,
+            _: &str,
+            _: &str,
+        ) -> Result<OAuthTokenResponse> {
+            unimplemented!()
+        }
+        fn oauth_token_with_refresh_token(
+            &self,
+            _: &Config,
+            _: &str,
+            _: &[&str],
+        ) -> Result<OAuthTokenResponse> {
+            unimplemented!()
+        }
+        fn destroy_oauth_token(&self, _config: &Config, _token: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn profile(
+            &self,
+            _: &Config,
+            _: &str,
+            _: Option<String>,
+        ) -> Result<Option<ResponseAndETag<ProfileResponse>>> {
+            if self.is_success {
+                Ok(self.profile_response.clone())
+            } else {
+                panic!("Not implemented yet")
+            }
+        }
+    }
+
+    #[test]
+    fn test_fetch_profile() {
+        let mut fxa =
+            FirefoxAccount::new("https://stable.dev.lcip.org", "12345678", "https://foo.bar");
+
+        fxa.add_token(
+            "profile",
+            AccessTokenInfo {
+                scope: "profile".to_string(),
+                token: "toktok".to_string(),
+                key: None,
+                expires_at: u64::max_value(),
+            },
+        );
+
+        let client = Arc::new(FakeClient {
+            is_success: true,
+            profile_response: Some(ResponseAndETag {
+                response: ProfileResponse {
+                    uid: "12345ab".to_string(),
+                    email: "foo@bar.com".to_string(),
+                    locale: "fr-FR".to_string(),
+                    display_name: None,
+                    avatar: "https://foo.avatar".to_string(),
+                    avatar_default: true,
+                    amr_values: vec![],
+                    two_factor_authentication: false,
+                },
+                etag: None,
+            }),
+        });
+        fxa.set_client(client);
+
+        let p = fxa.get_profile(false).unwrap();
+        assert_eq!(p.email, "foo@bar.com");
     }
 }
