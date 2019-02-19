@@ -2,7 +2,11 @@
 
 **See [the release process docs](docs/howtos/cut-a-new-release.md) for the steps to take when cutting a new release.**
 
-[Full Changelog](https://github.com/mozilla/application-services/compare/v0.16.1...master)
+[Full Changelog](https://github.com/mozilla/application-services/compare/v0.17.0...master)
+
+# 0.17.0 (_2019-02-19_)
+
+[Full Changelog](https://github.com/mozilla/application-services/compare/v0.16.1...v0.17.0)
 
 ## FxA
 
@@ -27,7 +31,17 @@
     - `fun deleteVisitsBetween(start: Long, end: Long)`: Similar to `deleteVisitsSince(start)`, but takes an end date. ([#621](https://github.com/mozilla/application-services/issues/621))
     - `fun getVisitInfos(start: Long, end: Long = Long.MAX_VALUE): List<VisitInfo>`: Returns a more detailed set of information about the visits that occured. ([#619](https://github.com/mozilla/application-services/issues/619))
         - `VisitInfo` is a new data class that contains a visit's url, title, timestamp, and type.
-    - `fun wipeLocal()`: Deletes all history entries without recording any sync information. ([#611](https://github.com/mozilla/application-services/issues/611))
+    - `fun wipeLocal()`: Deletes all history entries without recording any sync information. ([#611](https://github.com/mozilla/application-services/issues/611)).
+
+        This means that these visits are likely to start slowly trickling back
+        in over time, and many of them will come back entirely if a full sync
+        is performed (which may not happen for some time, admittedly). The
+        intention here is that this is a method that's used if data should be
+        discarded when disconnecting sync, assuming that it would be desirable
+        for the data to show up again if sync is reconnected.
+
+        For more permanent local deletions, see `deleteEverything`, also added
+        in this version.
 
     - `fun runMaintenance()`: Perform automatic maintenance. ([#611](https://github.com/mozilla/application-services/issues/611))
 
@@ -54,6 +68,16 @@
         is received from the OS, and things like the network cache have already
         been cleared.
 
+    - `fun deleteEverything()`: Delete all history visits. ([#647](https://github.com/mozilla/application-services/issues/647))
+
+        For sync users, this will not cause the visits to disappear from the
+        users remote devices, however it will prevent them from ever showing
+        up again, even across full syncs, or sync sign-in and sign-out.
+
+        See also `wipeLocal`, also added in this version, which is less
+        permanent with respect to sync data (a full sync is likely to bring
+        most of it back).
+
 
 ### Breaking Changes
 
@@ -62,6 +86,8 @@
 ### What's fixed
 
 - Locally deleted visits deleted using `deleteVisitsSince` should not be resurrected on future syncs. ([#621](https://github.com/mozilla/application-services/issues/621))
+- Places now properly updates frecency for origins, and generally supports
+  origins in a way more in line with how they're implemented on desktop. ([#429](https://github.com/mozilla/application-services/pull/429))
 
 # 0.16.1 (_2019-02-08_)
 

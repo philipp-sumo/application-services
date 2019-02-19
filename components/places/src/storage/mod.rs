@@ -13,7 +13,7 @@ use crate::msg_types::HistoryVisitInfo;
 use crate::types::{SyncGuid, SyncStatus, Timestamp, VisitTransition};
 use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::Result as RusqliteResult;
-use rusqlite::Row;
+use rusqlite::{Connection, Row};
 use serde_derive::*;
 use sql_support::{self, ConnExt};
 use std::fmt;
@@ -184,5 +184,32 @@ impl HistoryVisitInfo {
 
 pub fn run_maintenance(conn: &impl ConnExt) -> Result<()> {
     conn.execute_all(&["VACUUM", "PRAGMA optimize"])?;
+    Ok(())
+}
+
+pub(crate) fn put_meta(db: &Connection, key: &str, value: &ToSql) -> Result<()> {
+    db.execute_named_cached(
+        "REPLACE INTO moz_meta (key, value) VALUES (:key, :value)",
+        &[(":key", &key), (":value", value)],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn get_meta<T: FromSql>(db: &Connection, key: &str) -> Result<Option<T>> {
+    let res = db.try_query_one(
+        "SELECT value FROM moz_meta WHERE key = :key",
+        &[(":key", &key)],
+        true,
+    )?;
+    Ok(res)
+}
+
+/// Delete all items in the temp tables we use for staging changes.
+pub(crate) fn delete_pending_temp_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "DELETE FROM moz_updateoriginsupdate_temp;
+         DELETE FROM moz_updateoriginsdelete_temp;
+         DELETE FROM moz_updateoriginsinsert_temp;",
+    )?;
     Ok(())
 }
