@@ -160,6 +160,122 @@ class FirefoxAccount : RustObject {
         }.getAndConsumeString()
     }
 
+    /**
+     * Update the push subscription details for the current device.
+     * This needs should be called every time a push subscription is modified or expires.
+     *
+     * This performs network requests, and should not be used on the main thread.
+     *
+     * @param endpoint Push callback URL
+     * @param endpoint Public key used to encrypt push payloads
+     * @param endpoint Auth key used to encrypt push payloads
+     */
+    fun setDevicePushSubscription(endpoint: String, publicKey: String, authKey: String) {
+        rustCall { e ->
+            FxaClient.INSTANCE.fxa_set_push_subscription(validHandle(), endpoint, publicKey, authKey, e)
+        }
+    }
+
+    /**
+     * Update the display name (as shown in the FxA device manager, or the Send Tab target list)
+     * for the current device.
+     *
+     * This performs network requests, and should not be used on the main thread.
+     *
+     * @param displayName The current device display name
+     */
+    fun setDeviceDisplayName(displayName: String) {
+        rustCall { e ->
+            FxaClient.INSTANCE.fxa_set_display_name(validHandle(), displayName, e)
+        }
+    }
+
+    /**
+     * Retrieves the list of the connected devices in the current account, including the current one.
+     *
+     * This performs network requests, and should not be used on the main thread.
+     */
+    fun getDevices(): Array<Device> {
+        val devicesBuffer = rustCall { e ->
+            FxaClient.INSTANCE.fxa_get_devices(validHandle(), e)
+        }
+        try {
+            val devices = MsgTypes.Devices.parseFrom(devicesBuffer.asCodedInputStream()!!)
+            return Device.fromCollectionMessage(devices)
+        } finally {
+            FxaClient.INSTANCE.fxa_bytebuffer_free(devicesBuffer)
+        }
+    }
+
+    /**
+     * Retrieves any pending commands for the current device.
+     * This should be called semi-regularly as the main method of commands delivery (push)
+     * can sometimes be unreliable on mobile devices.
+     *
+     * This performs network requests, and should not be used on the main thread.
+     *
+     * @return A collection of [AccountEvent] that should be handled by the caller.
+     */
+    fun pollRemoteCommands(): Array<AccountEvent> {
+        val eventsBuffer = rustCall { e ->
+            FxaClient.INSTANCE.fxa_poll_remote_commands(validHandle(), e)
+        }
+        try {
+            val events = MsgTypes.AccountEvents.parseFrom(eventsBuffer.asCodedInputStream()!!)
+            return AccountEvent.fromCollectionMessage(events)
+        } finally {
+            FxaClient.INSTANCE.fxa_bytebuffer_free(eventsBuffer)
+        }
+    }
+
+    /**
+     * Handle any incoming push message payload coming from the Firefox Accounts
+     * servers.
+     *
+     * This performs network requests, and should not be used on the main thread.
+     *
+     * @return A collection of [AccountEvent] that should be handled by the caller.
+     */
+    fun handlePushMessage(payload: String): Array<AccountEvent> {
+        val eventsBuffer = rustCall { e ->
+            FxaClient.INSTANCE.fxa_handle_push_message(validHandle(), payload, e)
+        }
+        try {
+            val events = MsgTypes.AccountEvents.parseFrom(eventsBuffer.asCodedInputStream()!!)
+            return AccountEvent.fromCollectionMessage(events)
+        } finally {
+            FxaClient.INSTANCE.fxa_bytebuffer_free(eventsBuffer)
+        }
+    }
+
+    /**
+     * Ensure the current device "Send Tab" commands has been registered with the server.
+     * This method should be called once per "device lifetime" after the Sync Keys have been
+     * obtained and called again if they change.
+     *
+     * This performs network requests, and should not be used on the main thread.
+     */
+    fun ensureSendTabRegistered() {
+        rustCall { e ->
+            FxaClient.INSTANCE.fxa_ensure_send_tab_registered(validHandle(), e)
+        }
+    }
+
+    /**
+     * Send a single tab to another device identified by its device ID.
+     *
+     * This performs network requests, and should not be used on the main thread.
+     *
+     * @param targetDeviceId The target Device ID
+     * @param title The document title of the tab being sent
+     * @param url The url of the tab being sent
+     */
+    fun sendSingleTab(targetDeviceId: String, title: String, url: String) {
+        rustCall { e ->
+            FxaClient.INSTANCE.fxa_send_tab(validHandle(), targetDeviceId, title, url, e)
+        }
+    }
+
     companion object {
 
         /**

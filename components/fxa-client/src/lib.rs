@@ -138,7 +138,7 @@ impl FirefoxAccount {
     }
 
     /// Handle any incoming push message payload coming from the Firefox Accounts
-    /// server.
+    /// servers.
     pub fn handle_push_message(&mut self, payload: &str) -> Result<Vec<AccountEvent>> {
         let payload = serde_json::from_str(payload)?;
         match payload {
