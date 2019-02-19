@@ -16,7 +16,10 @@
 
 #[cfg(feature = "browserid")]
 use crate::SyncKeys;
-use crate::{msg_types, AccessTokenInfo, Error, ErrorKind, Profile};
+use crate::{
+    device::{Device, Location as DeviceLocation, PushSubscription, Type as DeviceType},
+    msg_types, send_tab, AccessTokenInfo, AccountEvent, Error, ErrorKind, Profile,
+};
 use ffi_support::{
     destroy_c_string, implement_into_ffi_by_delegation, implement_into_ffi_by_protobuf,
     opt_rust_string_to_c, rust_string_to_c, ErrorCode, ExternError, IntoFfi,
@@ -130,12 +133,83 @@ impl From<AccessTokenInfo> for AccessTokenInfoC {
 
 impl From<Profile> for msg_types::Profile {
     fn from(p: Profile) -> Self {
-        msg_types::Profile {
+        Self {
             avatar: Some(p.avatar),
             avatar_default: Some(p.avatar_default),
             display_name: p.display_name,
             email: Some(p.email),
             uid: Some(p.uid),
+        }
+    }
+}
+
+impl From<Device> for msg_types::Device {
+    fn from(d: Device) -> Self {
+        Self {
+            id: d.common.id,
+            display_name: d.common.display_name,
+            type_: Into::<msg_types::device::Type>::into(d.common.device_type) as i32,
+            push_subscription: d.common.push_subscription.map(|p| p.into()),
+            push_endpoint_expired: d.common.push_endpoint_expired,
+            is_current_device: d.is_current_device,
+            location: d.location.into(),
+            last_access_time: d.last_access_time,
+        }
+    }
+}
+
+impl From<DeviceType> for msg_types::device::Type {
+    fn from(t: DeviceType) -> Self {
+        match t {
+            DeviceType::Desktop => msg_types::device::Type::Desktop,
+            DeviceType::Mobile => msg_types::device::Type::Mobile,
+            DeviceType::Unknown => msg_types::device::Type::Unknown,
+        }
+    }
+}
+
+impl From<PushSubscription> for msg_types::device::PushSubscription {
+    fn from(p: PushSubscription) -> Self {
+        Self {
+            endpoint: p.endpoint,
+            public_key: p.public_key,
+            auth_key: p.auth_key,
+        }
+    }
+}
+
+impl From<DeviceLocation> for msg_types::device::Location {
+    fn from(dl: DeviceLocation) -> Self {
+        Self {
+            city: dl.city,
+            country: dl.country,
+            state: dl.state,
+            state_code: dl.state_code,
+        }
+    }
+}
+
+impl From<AccountEvent> for msg_types::AccountEvent {
+    fn from(e: AccountEvent) -> Self {
+        match e {
+            AccountEvent::TabReceived((device, payload)) => Self {
+                type_: msg_types::account_event::AccountEventType::TabReceived as i32,
+                data: Some(msg_types::account_event::Data::TabReceivedData(
+                    msg_types::account_event::TabReceivedData {
+                        from: device.map(|d| d.into()),
+                        entries: payload.entries.into_iter().map(|e| e.into()).collect(),
+                    },
+                )),
+            },
+        }
+    }
+}
+
+impl From<send_tab::TabData> for msg_types::account_event::tab_received_data::TabData {
+    fn from(data: send_tab::TabData) -> Self {
+        Self {
+            title: data.title,
+            url: data.url,
         }
     }
 }
@@ -165,3 +239,9 @@ implement_into_ffi_converting!(AccessTokenInfo, AccessTokenInfoC);
 
 implement_into_ffi_by_protobuf!(msg_types::Profile);
 implement_into_ffi_by_delegation!(Profile, msg_types::Profile);
+implement_into_ffi_by_protobuf!(msg_types::Device);
+implement_into_ffi_by_delegation!(Device, msg_types::Device);
+implement_into_ffi_by_protobuf!(msg_types::Devices);
+implement_into_ffi_by_protobuf!(msg_types::AccountEvents);
+implement_into_ffi_by_delegation!(AccountEvent, msg_types::AccountEvent);
+implement_into_ffi_by_protobuf!(msg_types::AccountEvent);

@@ -8,11 +8,12 @@ pub use crate::browser_id::{SyncKeys, WebChannelResponse};
 use crate::login_sm::LoginState;
 use crate::{
     commands::send_tab::SendTabPayload,
+    device::Device,
     errors::*,
     oauth::{OAuthFlow, RefreshToken},
     scoped_keys::ScopedKey,
 };
-pub use crate::{config::Config, device::Device, oauth::AccessTokenInfo, profile::Profile};
+pub use crate::{config::Config, oauth::AccessTokenInfo, profile::Profile};
 use lazy_static::lazy_static;
 use ring::rand::SystemRandom;
 use serde_derive::*;
@@ -23,13 +24,12 @@ use url::Url;
 mod browser_id;
 mod commands;
 mod config;
-mod device;
+pub mod device;
 pub mod errors;
 #[cfg(feature = "ffi")]
 pub mod ffi;
 // Include the `msg_types` module, which is generated from msg_types.proto.
 pub mod msg_types {
-    use prost_derive::Message; // https://github.com/danburkert/prost/issues/140
     include!(concat!(env!("OUT_DIR"), "/msg_types.rs"));
 }
 mod http_client;
@@ -39,7 +39,7 @@ mod oauth;
 mod profile;
 mod scoped_keys;
 pub mod scopes;
-mod send_tab;
+pub mod send_tab;
 mod state_persistence;
 mod util;
 
@@ -112,6 +112,8 @@ impl FirefoxAccount {
         self.client = client;
     }
 
+    /// Restore a `FirefoxAccount` instance from previously saved
+    /// state (either from `to_json` or `register_persist_callback`).
     pub fn from_json(data: &str) -> Result<Self> {
         let state = state_persistence::state_from_json(data)?;
         Ok(Self::from_state(state))
@@ -135,7 +137,10 @@ impl FirefoxAccount {
         Ok(url)
     }
 
-    pub fn handle_push_message(&mut self, payload: PushPayload) -> Result<Vec<AccountEvent>> {
+    /// Handle any incoming push message payload coming from the Firefox Accounts
+    /// server.
+    pub fn handle_push_message(&mut self, payload: &str) -> Result<Vec<AccountEvent>> {
+        let payload = serde_json::from_str(payload)?;
         match payload {
             PushPayload::CommandReceived(_) => self.poll_remote_commands(),
         }
@@ -148,6 +153,11 @@ impl FirefoxAccount {
         }
     }
 
+    /// Registers a persist callback that will be called automatically every
+    /// time the account state needs to be persisted.
+    /// `FirefoxAccount` can be then restored using the `from_json` method.
+    /// Warning: It is your responsability to persist this information in a secure
+    /// storage as it can contain Sync Keys and OAuth tokens!
     pub fn register_persist_callback(&mut self, persist_callback: PersistCallback) {
         self.persist_callback = Some(persist_callback);
     }
@@ -166,8 +176,6 @@ impl FirefoxAccount {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(tag = "event")]
 pub enum AccountEvent {
     // In the future: ProfileUpdated etc.
     TabReceived((Option<Device>, SendTabPayload)),

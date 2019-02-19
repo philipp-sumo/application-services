@@ -34,7 +34,7 @@ dialoguer = "0.3.0"
 webbrowser = "0.4.0"
 
 [build-dependencies]
-prost-build = "0.4"
+prost-build = { git = "https://github.com/eoger/prost", branch = "rust-2018-generation" }
 
 [features]
 browserid = ["openssl", "hawk"]

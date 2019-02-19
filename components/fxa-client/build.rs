@@ -3,5 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 fn main() {
-    prost_build::compile_protos(&["src/msg_types.proto"], &["src/"]).unwrap();
+    let mut prost_build = prost_build::Config::new();
+    prost_build.generate_rust_2018_code();
+    prost_build
+        .compile_protos(&["src/msg_types.proto"], &["src/"])
+        .unwrap();
 }

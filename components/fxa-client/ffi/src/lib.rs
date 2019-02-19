@@ -6,7 +6,7 @@ use ffi_support::{
     define_box_destructor, define_bytebuffer_destructor, define_handle_map_deleter,
     define_string_destructor, rust_str_from_c, ByteBuffer, ConcurrentHandleMap, ExternError,
 };
-use fxa_client::{ffi::*, FirefoxAccount, PersistCallback};
+use fxa_client::{device::PushSubscription, ffi::*, FirefoxAccount, PersistCallback};
 use std::{ffi::CString, os::raw::c_char};
 
 #[no_mangle]
@@ -140,7 +140,7 @@ pub extern "C" fn fxa_unregister_persist_callback(handle: u64, error: &mut Exter
 ///
 /// # Safety
 ///
-/// A destructor [fxa_profile_free] is provided for releasing the memory for this
+/// A destructor [fxa_bytebuffer_free] is provided for releasing the memory for this
 /// pointer type.
 #[no_mangle]
 pub extern "C" fn fxa_profile(
@@ -319,6 +319,126 @@ pub unsafe extern "C" fn fxa_get_access_token(
         let scope = rust_str_from_c(scope);
         fxa.get_access_token(&scope)
     })
+}
+
+/// Update the Push subscription information for the current device.
+#[no_mangle]
+pub unsafe extern "C" fn fxa_set_push_subscription(
+    handle: u64,
+    endpoint: *const c_char,
+    public_key: *const c_char,
+    auth_key: *const c_char,
+    error: &mut ExternError,
+) {
+    log::debug!("fxa_set_push_subscription");
+    ACCOUNTS.call_with_result_mut(error, handle, |fxa| {
+        let ps = PushSubscription {
+            endpoint: rust_str_from_c(endpoint).to_owned(),
+            public_key: rust_str_from_c(public_key).to_owned(),
+            auth_key: rust_str_from_c(auth_key).to_owned(),
+        };
+        // We don't really care about passing back the resulting Device record.
+        // We might in the future though.
+        fxa.set_push_subscription(ps).map(|_| ())
+    })
+}
+
+/// Update the display name for the current device.
+#[no_mangle]
+pub unsafe extern "C" fn fxa_set_display_name(
+    handle: u64,
+    display_name: *const c_char,
+    error: &mut ExternError,
+) {
+    log::debug!("fxa_set_display_name");
+    ACCOUNTS.call_with_result_mut(error, handle, |fxa| {
+        // We don't really care about passing back the resulting Device record.
+        // We might in the future though.
+        fxa.set_display_name(rust_str_from_c(display_name))
+            .map(|_| ())
+    })
+}
+
+/// Fetch the devices (including the current one) in the current account.
+///
+/// # Safety
+///
+/// A destructor [fxa_bytebuffer_free] is provided for releasing the memory for this
+/// pointer type.
+#[no_mangle]
+pub unsafe extern "C" fn fxa_get_devices(handle: u64, error: &mut ExternError) -> ByteBuffer {
+    log::debug!("fxa_get_devices");
+    ACCOUNTS.call_with_result_mut(error, handle, |fxa| {
+        fxa.get_devices().map(|d| {
+            let devices = d.into_iter().map(|device| device.into()).collect();
+            fxa_client::msg_types::Devices { devices }
+        })
+    })
+}
+
+/// Poll and handle available remote commands targeted to our own device.
+///
+/// # Safety
+///
+/// A destructor [fxa_bytebuffer_free] is provided for releasing the memory for this
+/// pointer type.
+#[no_mangle]
+pub unsafe extern "C" fn fxa_poll_remote_commands(
+    handle: u64,
+    error: &mut ExternError,
+) -> ByteBuffer {
+    log::debug!("fxa_poll_remote_commands");
+    ACCOUNTS.call_with_result_mut(error, handle, |fxa| {
+        fxa.poll_remote_commands().map(|evs| {
+            let events = evs.into_iter().map(|e| e.into()).collect();
+            fxa_client::msg_types::AccountEvents { events }
+        })
+    })
+}
+
+/// Handle a push payload coming from the Firefox Account servers.
+///
+/// # Safety
+///
+/// A destructor [fxa_bytebuffer_free] is provided for releasing the memory for this
+/// pointer type.
+#[no_mangle]
+pub unsafe extern "C" fn fxa_handle_push_message(
+    handle: u64,
+    json_payload: *const c_char,
+    error: &mut ExternError,
+) -> ByteBuffer {
+    log::debug!("fxa_handle_push_message");
+    ACCOUNTS.call_with_result_mut(error, handle, |fxa| {
+        fxa.handle_push_message(rust_str_from_c(json_payload))
+            .map(|evs| {
+                let events = evs.into_iter().map(|e| e.into()).collect();
+                fxa_client::msg_types::AccountEvents { events }
+            })
+    })
+}
+
+/// Ensures that the send tab command has been registered for our own device.
+#[no_mangle]
+pub unsafe extern "C" fn fxa_ensure_send_tab_registered(handle: u64, error: &mut ExternError) {
+    log::debug!("fxa_ensure_send_tab_registered");
+    ACCOUNTS.call_with_result_mut(error, handle, |fxa| fxa.ensure_send_tab_registered())
+}
+
+/// Send a tab to another device identified by its Device ID.
+#[no_mangle]
+pub unsafe extern "C" fn fxa_send_tab(
+    handle: u64,
+    target_device_id: *const c_char,
+    title: *const c_char,
+    url: *const c_char,
+    error: &mut ExternError,
+) {
+    log::debug!("fxa_send_tab");
+    let target = rust_str_from_c(target_device_id);
+    let title = rust_str_from_c(title);
+    let url = rust_str_from_c(url);
+    ACCOUNTS.call_with_result_mut(error, handle, |fxa| fxa.send_tab(target, title, url))
 }
 
 define_string_destructor!(fxa_str_free);

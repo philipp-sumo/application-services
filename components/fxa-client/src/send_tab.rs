@@ -2,16 +2,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+pub use crate::commands::send_tab::{SendTabPayload, TabData};
 use crate::{
-    commands::send_tab::{
-        self, EncryptedSendTabPayload, PrivateSendTabKeys, PublicSendTabKeys, SendTabPayload,
-    },
+    commands::send_tab::{self, EncryptedSendTabPayload, PrivateSendTabKeys, PublicSendTabKeys},
     errors::*,
-    http_client::DeviceResponse,
+    http_client::GetDeviceResponse,
     scopes, FirefoxAccount,
 };
 
 impl FirefoxAccount {
+    /// Ensures that the send tab command has been registered for our own device.
     pub fn ensure_send_tab_registered(&mut self) -> Result<()> {
         let own_keys: PrivateSendTabKeys =
             match self.state.commands_data.get(send_tab::COMMAND_NAME) {
@@ -33,6 +33,7 @@ impl FirefoxAccount {
         Ok(())
     }
 
+    /// Send a single tab to another device designated by its device ID.
     pub fn send_tab(&mut self, target_device_id: &str, title: &str, url: &str) -> Result<()> {
         let devices = self.get_devices()?;
         let target = devices
@@ -47,9 +48,9 @@ impl FirefoxAccount {
 
     pub(crate) fn handle_send_tab_command(
         &self,
-        sender: Option<DeviceResponse>,
+        sender: Option<GetDeviceResponse>,
         payload: serde_json::Value,
-    ) -> Result<(Option<DeviceResponse>, SendTabPayload)> {
+    ) -> Result<(Option<GetDeviceResponse>, SendTabPayload)> {
         let send_tab_key: PrivateSendTabKeys =
             match self.state.commands_data.get(send_tab::COMMAND_NAME) {
                 Some(s) => serde_json::from_str(s)?,

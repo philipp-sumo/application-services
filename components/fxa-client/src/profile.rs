@@ -114,10 +114,15 @@ mod tests {
         ) -> Result<()> {
             unimplemented!("Not implemented yet")
         }
-        fn devices(&self, _: &Config, _: &str) -> Result<Vec<DeviceResponse>> {
+        fn devices(&self, _: &Config, _: &str) -> Result<Vec<GetDeviceResponse>> {
             unimplemented!("Not implemented yet")
         }
-        fn update_device(&self, _: &Config, _: &str, _: DeviceUpdateRequest) -> Result<()> {
+        fn update_device(
+            &self,
+            _: &Config,
+            _: &str,
+            _: DeviceUpdateRequest,
+        ) -> Result<UpdateDeviceResponse> {
             unimplemented!("Not implemented yet")
         }
     }

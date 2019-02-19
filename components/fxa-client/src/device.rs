@@ -2,19 +2,23 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-pub use crate::http_client::DeviceResponse as Device;
+pub use crate::http_client::{
+    DeviceLocation as Location, DeviceType as Type, GetDeviceResponse as Device, PushSubscription,
+};
 use crate::{
     commands::send_tab::{self, SendTabPayload},
     errors::*,
     http_client::{
         CommandData, DeviceUpdateRequest, DeviceUpdateRequestBuilder, PendingCommand,
-        PushSubscription,
+        UpdateDeviceResponse,
     },
     AccountEvent, FirefoxAccount,
 };
 use std::collections::HashMap;
 
 impl FirefoxAccount {
+    /// Fetches the list of devices from the current account including
+    /// the current one.
     pub fn get_devices(&mut self) -> Result<Vec<Device>> {
         let access_token = self.get_refresh_token()?;
         self.client.devices(&self.state.config, &access_token)
@@ -36,6 +40,9 @@ impl FirefoxAccount {
         )
     }
 
+    /// Poll and handle any pending available command. This should be called
+    /// semi-regularly as the main method of commands delivery (push)
+    /// can sometimes be unreliable on mobile devices.
     pub fn poll_remote_commands(&mut self) -> Result<Vec<AccountEvent>> {
         let last_command_index = self.state.last_handled_command.unwrap_or(0);
         let refresh_token = self.get_refresh_token()?;
@@ -85,19 +92,22 @@ impl FirefoxAccount {
         }
     }
 
-    pub fn set_display_name(&self, name: &str) -> Result<()> {
+    pub fn set_display_name(&self, name: &str) -> Result<UpdateDeviceResponse> {
         let update = DeviceUpdateRequestBuilder::new().display_name(name).build();
         self.update_device(update)
     }
 
-    pub fn clear_display_name(&self) -> Result<()> {
+    pub fn clear_display_name(&self) -> Result<UpdateDeviceResponse> {
         let update = DeviceUpdateRequestBuilder::new()
             .clear_display_name()
             .build();
         self.update_device(update)
     }
 
-    pub fn set_push_subscription(&self, push_subscription: PushSubscription) -> Result<()> {
+    pub fn set_push_subscription(
+        &self,
+        push_subscription: PushSubscription,
+    ) -> Result<UpdateDeviceResponse> {
         let update = DeviceUpdateRequestBuilder::new()
             .push_subscription(push_subscription)
             .build();
@@ -106,7 +116,11 @@ impl FirefoxAccount {
 
     // TODO: use the PATCH endpoint instead of overwritting everything.
     #[allow(dead_code)]
-    pub(crate) fn register_command(&self, command: &str, value: &str) -> Result<()> {
+    pub(crate) fn register_command(
+        &self,
+        command: &str,
+        value: &str,
+    ) -> Result<UpdateDeviceResponse> {
         let mut commands = HashMap::new();
         commands.insert(command.to_owned(), value.to_owned());
         let update = DeviceUpdateRequestBuilder::new()
@@ -117,7 +131,7 @@ impl FirefoxAccount {
 
     // TODO: this currently deletes every command registered.
     #[allow(dead_code)]
-    pub(crate) fn unregister_command(&self, _: &str) -> Result<()> {
+    pub(crate) fn unregister_command(&self, _: &str) -> Result<UpdateDeviceResponse> {
         let commands = HashMap::new();
         let update = DeviceUpdateRequestBuilder::new()
             .available_commands(commands)
@@ -126,14 +140,14 @@ impl FirefoxAccount {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn clear_commands(&self) -> Result<()> {
+    pub(crate) fn clear_commands(&self) -> Result<UpdateDeviceResponse> {
         let update = DeviceUpdateRequestBuilder::new()
             .clear_available_commands()
             .build();
         self.update_device(update)
     }
 
-    fn update_device(&self, update: DeviceUpdateRequest) -> Result<()> {
+    fn update_device(&self, update: DeviceUpdateRequest) -> Result<UpdateDeviceResponse> {
         let refresh_token = self.get_refresh_token()?;
         self.client
             .update_device(&self.state.config, refresh_token, update)

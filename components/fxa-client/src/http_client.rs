@@ -46,13 +46,13 @@ pub trait FxAClient {
         target: &str,
         payload: &serde_json::Value,
     ) -> Result<()>;
-    fn devices(&self, config: &Config, access_token: &str) -> Result<Vec<DeviceResponse>>;
+    fn devices(&self, config: &Config, access_token: &str) -> Result<Vec<GetDeviceResponse>>;
     fn update_device(
         &self,
         config: &Config,
         refresh_token: &str,
         update: DeviceUpdateRequest,
-    ) -> Result<()>;
+    ) -> Result<UpdateDeviceResponse>;
 }
 
 pub struct Client;
@@ -148,7 +148,7 @@ impl FxAClient for Client {
             builder = builder.query(&[("limit", limit)])
         }
         let request = builder.build()?;
-        Self::make_request(request)?.json().map_err(|e| e.into())
+        Ok(Self::make_request(request)?.json()?)
     }
 
     fn invoke_command(
@@ -176,14 +176,14 @@ impl FxAClient for Client {
         Ok(())
     }
 
-    fn devices(&self, config: &Config, access_token: &str) -> Result<Vec<DeviceResponse>> {
+    fn devices(&self, config: &Config, access_token: &str) -> Result<Vec<GetDeviceResponse>> {
         let url = config.auth_url_path("v1/account/devices")?;
         let client = ReqwestClient::new();
         let request = client
             .request(Method::GET, url)
             .header(header::AUTHORIZATION, bearer_token(access_token))
             .build()?;
-        Self::make_request(request)?.json().map_err(|e| e.into())
+        Ok(Self::make_request(request)?.json()?)
     }
 
     fn update_device(
@@ -191,7 +191,7 @@ impl FxAClient for Client {
         config: &Config,
         refresh_token: &str,
         update: DeviceUpdateRequest,
-    ) -> Result<()> {
+    ) -> Result<UpdateDeviceResponse> {
         let url = config.auth_url_path("v1/account/device")?;
         let client = ReqwestClient::new();
         let request = client
@@ -200,8 +200,7 @@ impl FxAClient for Client {
             .header(header::CONTENT_TYPE, "application/json")
             .body(serde_json::to_string(&update)?)
             .build()?;
-        Self::make_request(request)?;
-        Ok(())
+        Ok(Self::make_request(request)?.json()?)
     }
 }
 
@@ -380,9 +379,34 @@ impl DeviceUpdateRequestBuilder {
     }
 }
 
-// TODO: not quite true, but ok for now
-// (e.g. isCurrentDevice is not always returned).
-pub type DeviceResponse = DeviceResponseCommon;
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DeviceLocation {
+    pub city: String,
+    pub country: String,
+    pub state: String,
+    #[serde(rename = "stateCode")]
+    pub state_code: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct GetDeviceResponse {
+    #[serde(flatten)]
+    pub common: DeviceResponseCommon,
+    #[serde(rename = "isCurrentDevice")]
+    pub is_current_device: bool,
+    pub location: DeviceLocation,
+    #[serde(rename = "lastAccessTime")]
+    pub last_access_time: Option<u64>,
+}
+
+impl std::ops::Deref for GetDeviceResponse {
+    type Target = DeviceResponseCommon;
+    fn deref(&self) -> &DeviceResponseCommon {
+        &self.common
+    }
+}
+
+pub type UpdateDeviceResponse = DeviceResponseCommon;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DeviceResponseCommon {
