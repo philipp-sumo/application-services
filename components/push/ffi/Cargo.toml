@@ -26,7 +26,7 @@ features = ["sqlcipher", "limits", "functions"]
 [dependencies.sync15]
 path = "../../sync15"
 
-[dependencies.places]
+[dependencies.push]
 path = ".."
 features = ["ffi"]
 

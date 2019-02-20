@@ -12,7 +12,7 @@ use std::os::raw::c_char;
 
 use config::PushConfiguration;
 use communications::{connect, ConnectHttp};
-use crypto::{Key, get_bytes, SER_AUTH_LENGTH};
+use crypto::{Key, get_bytes, SER_AUTH_LENGTH, decrypt};
 
 // indirection to help `?` figure out the target error type
 fn parse_url(url: &str) -> sync15::Result<url::Url> {
@@ -122,11 +122,11 @@ pub unsafe extern "C" fn push_unsubscribe(
     handle: u64,
     channel_id: *const c_char,
     error: &mut ExternError,
-) -> bool{
+) -> u8 {
     log::debug!("push_unsubscribe");
     CONNECTIONS.call_with_result_mut(error, handle, |conn| {
         let channel = ffi_support::opt_rust_str_from_c(channel_id);
-        conn.subscribe(channel).unwrap();
+        conn.subscribe(channel).unwrap()
     })
 }
 
@@ -136,11 +136,11 @@ pub unsafe extern "C" fn push_update(
     handle: u64,
     new_token: *const c_char,
     error: &mut ExternError,
-) -> bool{
+) -> u8 {
     log::debug!("push_update");
     CONNECTIONS.call_with_result_mut(error, handle, |conn| {
         let token = ffi_support::opt_rust_str_from_c(new_token);
-        conn.update(token).unwrap();
+        conn.update(token).unwrap()
     })
 }
 
@@ -171,6 +171,35 @@ pub unsafe extern "C" fn push_verify_connection(
     })
 }
 
+
+#[no_mangle]
+pub unsafe extern "C" fn push_decrypt(
+    handle: u64,
+    chid: *const c_char,
+    body: Vec<u8>,
+    encoding: *const c_char,
+    salt: *const c_char,
+    dh: *const c_char,
+    error: &mut ExternError,
+) -> *mut c_char {
+    log::debug!("push_decrypt");
+    CONNECTIONScall_with_result_mut(error, handle, |conn|{
+        let r_chid = ffi_support::rust_str_from_c(chid);
+        let r_body = ffi_support::rust_str_from_c(body);
+        let r_encoding = ffi_support::rust_str_from_c(encoding);
+        let r_salt = ffi_support::opt_rust_str_from_c(salt);
+        let rh_dh = ffi_support::opt_rust_str_from_c(dh);
+        // TODO: convert salt, dh from Option<String> to Option<Vec<u8>>
+        //TODO:: FINISH THIS!
+        if let Some(push_record) = conn.storage.get_record(conn.uaid, chid)?{
+            crypto::decrypt(
+                push_record.key,
+                r_body.to_vec(),
+                r_encoding,
+                )
+        }
+    })
+}
 // TODO: modify these to be relevant.
 
 define_string_destructor!(push_destroy_string);

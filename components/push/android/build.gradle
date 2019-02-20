@@ -94,10 +94,8 @@ configurations {
 
 dependencies {
     jnaForTest 'net.java.dev.jna:jna:4.5.2@jar'
-
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
     implementation 'net.java.dev.jna:jna:4.5.2@aar'
-
     // For reasons unknown, resolving the jnaForTest configuration directly
     // trips a nasty issue with the Android-Gradle plugin 3.2.1, like `Cannot
     // change attributes of configuration ':PROJECT:kapt' after it has been
@@ -105,13 +103,12 @@ dependencies {
     // super-configuration of the testImplementation and then the `.files` is
     // causing it to be resolved.  Cloning first dissociates the configuration,
     // avoiding other configurations from being resolved.  Tricky!
-    testImplementation files(configurations.jnaForTest.copyRecursive().files)
     testImplementation 'junit:junit:4.12'
     testImplementation 'org.robolectric:robolectric:3.8'
     testImplementation 'org.mockito:mockito-core:2.21.0'
-
     androidTestImplementation 'com.android.support.test:runner:1.0.2'
     androidTestImplementation 'com.android.support.test.espresso:espresso-core:3.0.2'
+    implementation project(':as-support-library')
 }
 
 afterEvaluate {

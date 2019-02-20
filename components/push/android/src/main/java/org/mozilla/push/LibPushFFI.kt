@@ -47,7 +47,7 @@ internal interface LibPushFFI : Library {
             registration_id: String,
             sender_id: String?,
             out_err: RustError.ByReference
-    ): RawPushConnection?
+    ): RawPushHandle
 
     /** Returns JSON string, which you need to free with push_destroy_string */
     fun push_get_subscription_info(
@@ -61,13 +61,13 @@ internal interface LibPushFFI : Library {
             conn: RawPushConnection,
             channel_id: String,
             out_err: RustError.ByReference
-    ): Boolean
+    ): Byte
 
     fun push_update(
             conn: RawPushConnection,
             new_token: String,
             out_err: RustError.ByReference
-    ): Boolean
+    ): Byte
 
     fun push_verify_connection(
             conn: RawPushConnection,
@@ -78,8 +78,10 @@ internal interface LibPushFFI : Library {
     fun push_destroy_string(s: Pointer)
 
     /** Destroy connection created using `push_connection_new` */
-    fun push_connection_destroy(obj: RawPushConnection)
+    fun push_connection_destroy(obj: RawPushHandle, out_err: RustError.ByReference)
 
 }
 
 class RawPushConnection : PointerType()
+
+internal typealiase RawPushHandle = Long
