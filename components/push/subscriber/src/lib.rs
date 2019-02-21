@@ -10,12 +10,16 @@ extern crate storage;
 
 use std::collections::HashMap;
 
-use communications::{ConnectHttp, Connection};
-use crypto::{Crypto, Cryptography, Key};
-use storage::{ChannelID, Storage, Store};
+use base64;
 
-use push_errors::{self as error, ErrorKind::SubscriptionError};
+use config::PushConfiguration;
+use communications::{ConnectHttp, Connection, RegisterResponse, connect};
+use crypto::{Crypto, Cryptography, Key, SER_AUTH_LENGTH};
+use storage::{Storage, Store};
 
+use push_errors::{self as error, Result};
+
+/*
 pub struct SubscriptionKeys {
     pub auth: Vec<u8>,
     pub p256dh: Vec<u8>,
@@ -27,7 +31,61 @@ pub struct Subscription {
     pub endpoint: String,
     pub keys: SubscriptionKeys,
 }
+*/
+pub struct PushManager {
+    config: PushConfiguration,
+    conn: ConnectHttp,
+    store: Store,
+}
 
+impl PushManager {
+    pub fn new(config: PushConfiguration) -> Result<Self> {
+        let store = if let Some(ref path) = config.database_path {
+            Store::open(path)?
+        } else {
+            Store::open_in_memory()?
+        };
+        Ok(PushManager {
+            config: config.clone(),
+            conn: connect(config)?,
+            store
+        })
+    }
+
+    // XXX: make these trait methods
+    // XXX: should be called subscribe?
+    pub fn get_subscription_info(&mut self, channel_id: &str, scope: &str) -> Result<RegisterResponse> {
+        //let key = self.config.vapid_key;
+        let reg_token = self.config.registration_id.clone().unwrap();
+        let subscription_key = Crypto::generate_key().unwrap();
+        let auth =
+            base64::encode_config(&crypto::get_bytes(SER_AUTH_LENGTH)?,
+                                  base64::URL_SAFE_NO_PAD);
+       let info = self.conn.subscribe(channel_id)?;
+        // store the channelid => auth + subscription_key
+        let mut record = storage::PushRecord::new(
+            &info.uaid,
+            &channel_id,
+            &info.endpoint,
+            scope,
+            subscription_key.clone(),
+        );
+        record.app_server_key = self.config.vapid_key.clone();
+        record.native_id = Some(reg_token);
+        self.store.put_record(&record)?;
+        Ok(info)
+    }
+
+    // XXX: maybe -> Result<()> instead
+    // XXX: maybe handle channel_id None case separately?
+    pub fn unsubscribe(&self, channel_id: Option<&str>) -> Result<bool> {
+        let result = self.conn.unsubscribe(channel_id)?;
+        self.store.delete_record(self.conn.uaid.as_ref().unwrap(), channel_id.unwrap())?;
+        Ok(result)
+    }
+}
+
+/*
 pub trait Subscriber {
     // get a new subscription (including keys, endpoint, etc.)
     // note if this is a "priviledged" system call that does not require additional decryption
@@ -52,8 +110,11 @@ pub trait Subscriber {
     // to_json -> impl Into::<String> for Subscriber...
 }
 
-impl Subscriber for Subscription {
-    fn get_subscription<S: Storage>(
+// TODO: transplant the work of our ffi calls into Subscriber
+// pass Subscriber around as *the* handle exposed via ffi
+// plus the
+impl Subscriber for PushManager {
+  fn get_subscription<S: Storage>(
         storage: S,
         origin_attributes: HashMap<String, String>,
         app_server_key: Option<&str>,
@@ -98,5 +159,29 @@ impl Subscriber for Subscription {
     // remove a subscription
     fn del_subscription<S: Storage>(store: S, chid: ChannelID) -> Result<bool, SubscriptionError> {
         Ok(false)
+    }
+}
+*/
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    //use serde_json::json;
+
+    // use crypto::{get_bytes, Key};
+
+    const DUMMY_CHID: &'static str = "deadbeef00000000decafbad00000000";
+    const DUMMY_UAID: &'static str = "abad1dea00000000aabbccdd00000000";
+    // Local test SENDER_ID
+    const SENDER_ID: &'static str = "308358850242";
+    const SECRET: &'static str = "SuP3rS1kRet";
+
+    #[test]
+    fn basic() -> Result<()> {
+        let mut pm = PushManager::new(Default::default())?;
+        pm.get_subscription_info(DUMMY_CHID, "http://example.com/test-scope")?;
+        pm.unsubscribe(Some(DUMMY_CHID))?;
+        Ok(())
     }
 }

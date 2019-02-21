@@ -91,7 +91,7 @@ pub trait Connection {
 
 /// Connect to the Autopush server via the HTTP interface
 pub struct ConnectHttp {
-    options: PushConfiguration,
+    pub options: PushConfiguration,
     client: reqwest::Client,
     pub database: Store,
     pub uaid: Option<String>,

@@ -18,7 +18,8 @@ use ece::{
     LocalKeyPairImpl,
 };
 use openssl::rand::rand_bytes;
-mod error;
+
+use push_errors as error;
 
 pub const SER_AUTH_LENGTH: usize = 16;
 

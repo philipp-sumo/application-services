@@ -18,9 +18,6 @@ pub struct PushConfiguration {
     // base64 encoded public VAPID key (to secure endpoint)
     pub vapid_key: Option<String>,
 
-    // Always connect flag
-    pub always_connect: bool,
-
     // Service enabled flag
     pub enabled: bool,
 
@@ -45,9 +42,8 @@ impl Default for PushConfiguration {
             socket_protocol: None,
             http_protocol: Some(String::from("https")),
             bridge_type: None,
-            registration_id: None,
+            registration_id: Some(String::from("deafbeef00000000")),
             vapid_key: None,
-            always_connect: true,
             enabled: true,
             ping_interval: 1800,
             request_timeout: 1,

@@ -8,11 +8,15 @@ use ffi_support::{
 };
 use sync15::telemetry;
 
+use base64;
+use serde_json::{self, json};
+
 use std::os::raw::c_char;
 
+use communications::{connect, ConnectHttp, Connection};
 use config::PushConfiguration;
-use communications::{connect, ConnectHttp};
-use crypto::{Key, get_bytes, SER_AUTH_LENGTH, decrypt};
+use crypto::{get_bytes, Crypto, Cryptography, Key, SER_AUTH_LENGTH};
+use storage::Storage;
 
 // indirection to help `?` figure out the target error type
 fn parse_url(url: &str) -> sync15::Result<url::Url> {
@@ -49,28 +53,33 @@ pub unsafe extern "C" fn push_connection_new(
     database_path: *const c_char,
     error: &mut ExternError,
 ) -> u64 {
-    log::debug!("push_connection_new {} {} -> {} {}=>{}",
-        socket_protocol, server_host, bridge_type, sender_id, registration_id);
+    log::debug!(
+        "push_connection_new {:?} {:?} -> {:?} {:?}=>{:?}",
+        socket_protocol,
+        server_host,
+        bridge_type,
+        sender_id,
+        registration_id
+    );
     // return this as a reference to the map since that map contains the actual handles that rust uses.
     // see ffi layer for details.
     CONNECTIONS.insert_with_result(error, || {
-        let reg_id = ffi_support::rust_string_from_c(registration_id);
-        let host = ffi_support::opt_rust_string_from_c(server_host);
+        let host = ffi_support::rust_string_from_c(server_host);
         let protocol = ffi_support::opt_rust_string_from_c(socket_protocol);
+        let reg_id = ffi_support::opt_rust_string_from_c(registration_id);
         let bridge = ffi_support::opt_rust_string_from_c(bridge_type);
         let sender = ffi_support::rust_string_from_c(sender_id);
-        let key = ffi_support::opt_rust_string_from_c(encryption_key);
         let db_path = ffi_support::opt_rust_string_from_c(database_path);
-        let config = PushConfiguration{
+        let config = PushConfiguration {
             server_host: host,
             http_protocol: protocol,
             bridge_type: bridge,
             registration_id: reg_id,
             sender_id: sender,
             database_path: db_path,
-            .. default()
+            ..Default::default()
         };
-        connect(config)
+        connect(config).into()
     })
 }
 
@@ -81,38 +90,40 @@ pub unsafe extern "C" fn push_get_subscription_info(
     handle: u64,
     channel_id: *const c_char,
     error: &mut ExternError,
-) -> *mut c_char{
+) -> *mut c_char {
     log::debug!("push_get_subscription");
     CONNECTIONS.call_with_result_mut(error, handle, |conn| {
         let options = conn.options.clone();
         let channel = ffi_support::rust_str_from_c(channel_id);
         let key = options.vapid_key;
-        let reg_token = options.registration_id;
-        let subscription_key = crypto::generate_key().unwrap();
-        let auth = base64::encode_config(
-            &crypto::get_bytes(SER_AUTH_LENGTH), base64::URL_SAFE_NO_PAD);
+        let reg_token = options.registration_id?;
+        let subscription_key = Crypto::generate_key().unwrap();
+        let auth =
+            base64::encode_config(&crypto::get_bytes(SER_AUTH_LENGTH)?,
+                                  base64::URL_SAFE_NO_PAD);
         // Don't auto add the subscription to the db.
         // (endpoint updates also call subscribe and should be lighter weight)
         let info = conn.subscribe(channel).unwrap();
         // store the channelid => auth + subscription_key
-        let mut record = PushRecord::new(
+        let mut record = storage::PushRecord::new(
             &info.uaid,
             &channel,
             &info.endpoint,
             "",
-            subscription_key.clone());
+            subscription_key.clone(),
+        );
         record.app_server_key = options.vapid_key.clone();
         record.native_id = Some(reg_token);
-        self.database.put_record(&record)?;
+        conn.database.put_record(&record)?;
         let subscription_info = json!({
-            "endpoint": info.endpoint
+            "endpoint": info.endpoint,
             "keys": {
                 "auth": auth,
-                "p256dh": base64::encode_config(subscription_key.public,
+                "p256dh": base64::encode_config(&subscription_key.public,
                                                 base64::URL_SAFE_NO_PAD)
             }
         });
-        return subscription_info.to_string()
+        return Ok(subscription_info.to_string());
     })
 }
 
@@ -126,7 +137,7 @@ pub unsafe extern "C" fn push_unsubscribe(
     log::debug!("push_unsubscribe");
     CONNECTIONS.call_with_result_mut(error, handle, |conn| {
         let channel = ffi_support::opt_rust_str_from_c(channel_id);
-        conn.subscribe(channel).unwrap()
+        Ok(conn.unsubscribe(channel).unwrap())
     })
 }
 
@@ -139,8 +150,8 @@ pub unsafe extern "C" fn push_update(
 ) -> u8 {
     log::debug!("push_update");
     CONNECTIONS.call_with_result_mut(error, handle, |conn| {
-        let token = ffi_support::opt_rust_str_from_c(new_token);
-        conn.update(token).unwrap()
+        let token = ffi_support::opt_rust_str_from_c(new_token)?;
+        Ok(conn.update(&token).unwrap())
     })
 }
 
@@ -151,52 +162,50 @@ pub unsafe extern "C" fn push_update(
 pub unsafe extern "C" fn push_verify_connection(
     handle: u64,
     error: &mut ExternError,
-) -> *mut c_char{
+) -> *mut c_char {
     log::debug!("push_verify");
     CONNECTIONS.call_with_result_mut(error, handle, |conn| {
-        let known_channels = storage::get_channel_list(conn.uaid.unwrap());
+        let known_channels = conn.database.get_channel_list(&conn.uaid.unwrap());
         let options = conn.options.clone();
-        let key = options.vapid_key;
-        let reg_id = options.registration_id;
-        if ! conn.verify_connection(known_channels){
-            if let Some(new_endpoints) = conn.regenerate_endpoints(
-                known_channels,
-                key,
-                reg_id
-                ){
-                    serde_json::to_string(new_endpoints)
+        if let Ok(r) = conn.verify_connection() {
+            if r == false {
+                if let Ok(new_endpoints) = conn.regenerate_endpoints() {
+                    return serde_json::to_string(&new_endpoints).into()
+                }
             }
         }
-        String::from("")
+        Ok(String::from(""))
     })
 }
-
 
 #[no_mangle]
 pub unsafe extern "C" fn push_decrypt(
     handle: u64,
     chid: *const c_char,
-    body: Vec<u8>,
+    body: *const c_char,
     encoding: *const c_char,
     salt: *const c_char,
     dh: *const c_char,
     error: &mut ExternError,
 ) -> *mut c_char {
     log::debug!("push_decrypt");
-    CONNECTIONScall_with_result_mut(error, handle, |conn|{
+    CONNECTIONS.call_with_result_mut(error, handle, |conn| {
         let r_chid = ffi_support::rust_str_from_c(chid);
-        let r_body = ffi_support::rust_str_from_c(body);
+        let r_body = ffi_support::rust_str_from_c(body).to_owned().as_bytes().to_vec();
         let r_encoding = ffi_support::rust_str_from_c(encoding);
-        let r_salt = ffi_support::opt_rust_str_from_c(salt);
-        let rh_dh = ffi_support::opt_rust_str_from_c(dh);
-        // TODO: convert salt, dh from Option<String> to Option<Vec<u8>>
-        //TODO:: FINISH THIS!
-        if let Some(push_record) = conn.storage.get_record(conn.uaid, chid)?{
-            crypto::decrypt(
-                push_record.key,
-                r_body.to_vec(),
-                r_encoding,
-                )
+        let r_salt: Option<Vec<u8>> =
+            ffi_support::opt_rust_str_from_c(salt).map(|v| v.as_bytes().to_vec());
+        let r_dh: Option<Vec<u8>> =
+            ffi_support::opt_rust_str_from_c(dh).map(|v| v.as_bytes().to_vec());
+        let uaid = conn.uaid.unwrap();
+        if let Some(push_record) = conn.database.get_record(&uaid, r_chid)? {
+            let key = crypto::Key::deserialize(push_record.key)?;
+            return crypto::Crypto::decrypt(&key, r_body, r_encoding, r_salt, r_dh);
+        } else {
+            log::error!("No record for uaid:chid {:?}:{:?}", conn.uaid, chid);
+            // TODO: Send Unsubscription?
+            // TODO: How to declare error response?
+            Ok(String::from("").as_bytes().to_vec())
         }
     })
 }

@@ -14,10 +14,13 @@ log = "0.4"
 url = "1.7.1"
 ffi-support = { path = "../../support/ffi" }
 lazy_static = "1.2.0"
+base64 = "0.10"
 
-configuration = { path = "../config"}
-communications = {path = "../communications"}
-crypto = {path = "../crypto"}
+config = { path = "../config"}
+crypto = { path = "../crypto" }
+storage = { path = "../storage" }
+communications = { path = "../communications" }
+
 
 [dependencies.rusqlite]
 version = "0.16.0"
@@ -26,9 +29,6 @@ features = ["sqlcipher", "limits", "functions"]
 [dependencies.sync15]
 path = "../../sync15"
 
-[dependencies.push]
-path = ".."
-features = ["ffi"]
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.7.0"

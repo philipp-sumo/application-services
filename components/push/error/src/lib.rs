@@ -9,6 +9,9 @@ use rusqlite;
 
 use failure::{Backtrace, Context, Fail};
 
+use ffi_support;
+
+
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug)]
@@ -65,6 +68,15 @@ impl From<openssl::error::ErrorStack> for Error {
             "{:?}",
             inner
         )))))
+    }
+}
+
+//TODO: Yeah, make this reflect the actual error...
+impl Into<ffi_support::ExternError> for Error {
+    fn into(self) -> ffi_support::ExternError {
+        ffi_support::ExternError::new_error(
+            ffi_support::ErrorCode::new(-8675309),
+            format!("{:?}", self))
     }
 }
 
