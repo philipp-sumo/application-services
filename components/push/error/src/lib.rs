@@ -142,6 +142,12 @@ pub enum ErrorKind {
     #[fail(display = "Missing Registration Token")]
     MissingRegistrationTokenError,
 
+    #[fail(display = "Transcoding Error: {}", _0)]
+    TranscodingError(String),
+
+    #[fail(display = "Encryption Error: {}", _0)]
+    EncryptionError(String),
+
 }
 
 impl ErrorKind {
@@ -156,6 +162,9 @@ impl ErrorKind {
             ErrorKind::StorageError(_) => 28,
             ErrorKind::StorageSqlError(_) => 29,
             ErrorKind::MissingRegistrationTokenError => 30,
+            ErrorKind::TranscodingError(_) =>31,
+            ErrorKind::EncryptionError(_) =>32,
+
         };
         ffi_support::ErrorCode::new(code)
     }

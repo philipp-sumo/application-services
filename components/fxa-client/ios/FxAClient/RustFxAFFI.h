@@ -55,14 +55,6 @@ typedef struct SyncKeysC {
     const char *const _Nonnull xcs;
 } SyncKeysC;
 
-typedef struct ProfileC {
-    const char *const _Nonnull uid;
-    const char *const _Nonnull email;
-    const char *const _Nullable avatar;
-    const uint8_t avatar_default;
-    const char *const _Nullable display_name;
-} ProfileC;
-
 typedef uint64_t FirefoxAccountHandle;
 
 char *_Nonnull fxa_begin_oauth_flow(FirefoxAccountHandle handle,
@@ -84,13 +76,6 @@ FirefoxAccountHandle fxa_from_json(const char *_Nonnull json,
 
 char *_Nullable fxa_to_json(FirefoxAccountHandle handle,
                             FxAErrorC *_Nonnull out);
-
-void fxa_register_persist_callback(FirefoxAccountHandle handle,
-                                   void (*_Nonnull callback_fn)(const char *_Nonnull json),
-                                   FxAErrorC *_Nonnull out);
-
-void fxa_unregister_persist_callback(FirefoxAccountHandle handle,
-                                     FxAErrorC *_Nonnull out);
 
 FirefoxAccountHandle fxa_new(const char *_Nonnull content_base,
                              const char *_Nonnull client_id,

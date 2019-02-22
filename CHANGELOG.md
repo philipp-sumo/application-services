@@ -4,6 +4,19 @@
 
 [Full Changelog](https://github.com/mozilla/application-services/compare/v0.17.0...master)
 
+## Places
+
+### What's Fixed
+
+- Autocomplete should no longer return an error when encountering certain emoji ([#691](https://github.com/mozilla/application-services/pull/691))
+
+## Logging
+
+### What's New
+
+- The `rc_log` component now has support for iOS. It is only available as part of the
+  MozillaAppServices megazord. ([#618](https://github.com/mozilla/application-services/issues/618))
+
 # 0.17.0 (_2019-02-19_)
 
 [Full Changelog](https://github.com/mozilla/application-services/compare/v0.16.1...v0.17.0)

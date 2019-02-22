@@ -16,8 +16,8 @@ use serde_json::{self, json};
 use communications::{connect, ConnectHttp, Connection};
 use config::PushConfiguration;
 use crypto::{self, Crypto, Cryptography, SER_AUTH_LENGTH};
+use push_errors::{self, Result};
 use storage::Storage;
-use push_errors::{Result, ERROR_CODE};
 
 #[no_mangle]
 pub extern "C" fn push_enable_logcat_logging() {
@@ -109,8 +109,7 @@ pub unsafe extern "C" fn push_get_subscription_info(
         );
         record.app_server_key = key.clone();
         record.native_id = Some(reg_token);
-        conn.database
-            .put_record(&record)?;
+        conn.database.put_record(&record)?;
         let subscription_info = json!({
             "endpoint": info.endpoint,
             "keys": {
@@ -133,7 +132,7 @@ pub unsafe extern "C" fn push_unsubscribe(
     log::debug!("push_unsubscribe");
     CONNECTIONS.call_with_result_mut(error, handle, |conn| -> Result<bool> {
         let channel = ffi_support::opt_rust_str_from_c(channel_id);
-         conn.unsubscribe(channel)
+        conn.unsubscribe(channel)
     })
 }
 
@@ -147,13 +146,14 @@ pub unsafe extern "C" fn push_update(
     log::debug!("push_update");
     CONNECTIONS.call_with_result_mut(error, handle, |conn| {
         if let Some(token) = ffi_support::opt_rust_str_from_c(new_token) {
-            return Ok(conn
-                .update(&token)
-                .map_err(|e| ExternError::new_error(*ERROR_CODE, format!("{:?}", e)))?);
+            return Ok(conn.update(&token).map_err(|e| {
+                let err = push_errors::ErrorKind::TranscodingError(format!("{:?}", e));
+                ExternError::new_error(err.error_code(), err.to_string())
+            })?);
         }
         Err(ExternError::new_error(
-            *ERROR_CODE,
-            format!("Missing new token")
+            push_errors::ErrorKind::MissingRegistrationTokenError.error_code(),
+            format!("Missing new registration token"),
         ))
     })
 }
@@ -172,10 +172,10 @@ pub unsafe extern "C" fn push_verify_connection(
             if r == false {
                 if let Ok(new_endpoints) = conn.regenerate_endpoints() {
                     // use a `match` here to resolve return of <_>
-                    return match serde_json::to_string(&new_endpoints) {
-                        Err(e) => Err(ExternError::new_error(*ERROR_CODE, format!("{:?}", e))),
-                        Ok(v) => Ok(v),
-                    };
+                    return serde_json::to_string(&new_endpoints).map_err(|e| {
+                        let err = push_errors::ErrorKind::TranscodingError(format!("{:?}", e));
+                        ExternError::new_error(err.error_code(), err.to_string())
+                    });
                 }
             }
         }
@@ -207,23 +207,32 @@ pub unsafe extern "C" fn push_decrypt(
             ffi_support::opt_rust_str_from_c(dh).map(|v| v.as_bytes().to_vec());
         let uaid = conn.uaid.clone().unwrap();
         match conn.database.get_record(&uaid, r_chid) {
-            Err(e) => Err(ExternError::new_error(*ERROR_CODE, format!("{:?}", e))),
+            Err(e) => Err({
+                let err = push_errors::ErrorKind::StorageError(format!("{:?}", e));
+                ExternError::new_error(err.error_code(), err.to_string())
+            }),
             Ok(v) => {
                 if let Some(val) = v {
-                    let key = crypto::Key::deserialize(val.key)
-                        .map_err(|e| ExternError::new_error(*ERROR_CODE, format!("{:?}", e)))?;
+                    let key = crypto::Key::deserialize(val.key).map_err(|e| {
+                        let err = push_errors::ErrorKind::EncryptionError(format!("{:?}", e));
+                        ExternError::new_error(err.error_code(), err.to_string())
+                    })?;
                     return match crypto::Crypto::decrypt(&key, r_body, r_encoding, r_salt, r_dh) {
-                        Err(e) => Err(ExternError::new_error(*ERROR_CODE, format!("{:?}", e))),
-                        Ok(v) => match serde_json::to_string(&v) {
-                            Ok(v) => Ok(v),
-                            Err(e) => Err(ExternError::new_error(*ERROR_CODE, format!("{:?}", e))),
-                        },
+                        Err(e) => {
+                            let err = push_errors::ErrorKind::EncryptionError(format!("{:?}", e));
+                            Err(ExternError::new_error(err.error_code(), err.to_string()))
+                        }
+                        Ok(v) => serde_json::to_string(&v).map_err(|e| {
+                            let err = push_errors::ErrorKind::TranscodingError(format!("{:?}", e));
+                            ExternError::new_error(err.error_code(), err.to_string())
+                        }),
                     };
                 };
-                Err(ExternError::new_error(
-                    *ERROR_CODE,
-                    format!("No record for uaid:chid {:?}:{:?}", conn.uaid, chid),
-                ))
+                let err = push_errors::ErrorKind::StorageError(format!(
+                    "No record for uaid:chid {:?}:{:?}",
+                    conn.uaid, chid
+                ));
+                Err(ExternError::new_error(err.error_code(), err.to_string()))
             }
         }
     })
