@@ -8,9 +8,12 @@ use std::result;
 use rusqlite;
 
 use failure::{Backtrace, Context, Fail};
-
+use lazy_static;
 use ffi_support;
 
+lazy_static::lazy_static! {
+    pub static ref ERROR_CODE: ffi_support::ErrorCode = ffi_support::ErrorCode::new(-8675309);
+}
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -71,12 +74,12 @@ impl From<openssl::error::ErrorStack> for Error {
     }
 }
 
-//TODO: Yeah, make this reflect the actual error...
-impl Into<ffi_support::ExternError> for Error {
-    fn into(self) -> ffi_support::ExternError {
+impl From<Error> for ffi_support::ExternError {
+    fn from(e: Error) -> ffi_support::ExternError {
         ffi_support::ExternError::new_error(
-            ffi_support::ErrorCode::new(-8675309),
-            format!("{:?}", self))
+            e.kind().error_code(),
+            format!("{:?}", e)
+        )
     }
 }
 
@@ -135,4 +138,25 @@ pub enum ErrorKind {
     /// A failure to encode data to/from storage.
     #[fail(display = "Error executing SQL: {}", _0)]
     StorageSqlError(#[fail(cause)] rusqlite::Error),
+
+    #[fail(display = "Missing Registration Token")]
+    MissingRegistrationTokenError,
+
+}
+
+impl ErrorKind {
+    pub fn error_code(&self) -> ffi_support::ErrorCode {
+        let code = match self {
+            ErrorKind::GeneralError(_) => 22,
+            ErrorKind::InternalError(_) => 23,
+            ErrorKind::OpenSSLError(_) => 24,
+            ErrorKind::CommunicationError(_) => 25,
+            ErrorKind::CommunicationServerError(_) => 26,
+            ErrorKind::AlreadyRegisteredError => 27,
+            ErrorKind::StorageError(_) => 28,
+            ErrorKind::StorageSqlError(_) => 29,
+            ErrorKind::MissingRegistrationTokenError => 30,
+        };
+        ffi_support::ErrorCode::new(code)
+    }
 }

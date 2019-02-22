@@ -2,7 +2,7 @@
 name = "push-ffi"
 edition = "2018"
 version = "0.1.0"
-authors = ["jrconlin <me+crypt@jrconlin.com>"]
+authors = ["jrconlin <me+crypt@jrconlin.com>", "Phil Jenvey <pjenvey@underboss.org>"]
 
 [lib]
 name = "push_ffi"

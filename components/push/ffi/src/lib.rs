@@ -17,6 +17,7 @@ use communications::{connect, ConnectHttp, Connection};
 use config::PushConfiguration;
 use crypto::{self, Crypto, Cryptography, SER_AUTH_LENGTH};
 use storage::Storage;
+use push_errors::{Result, ERROR_CODE};
 
 #[no_mangle]
 pub extern "C" fn push_enable_logcat_logging() {
@@ -34,7 +35,6 @@ pub extern "C" fn push_enable_logcat_logging() {
 
 lazy_static::lazy_static! {
     static ref CONNECTIONS: ConcurrentHandleMap<ConnectHttp> = ConcurrentHandleMap::new();
-    static ref ERROR_CODE: ffi_support::ErrorCode = ErrorCode::new(-8675309);
 }
 
 /// Instantiate a Http connection. Returned connection must be freed with
@@ -75,7 +75,7 @@ pub unsafe extern "C" fn push_connection_new(
             database_path: db_path,
             ..Default::default()
         };
-        connect(config).map_err(|e| ExternError::new_error(*ERROR_CODE, format!("{:?}", e)))
+        connect(config)
     })
 }
 
@@ -88,24 +88,17 @@ pub unsafe extern "C" fn push_get_subscription_info(
     error: &mut ExternError,
 ) -> *mut c_char {
     log::debug!("push_get_subscription");
-    CONNECTIONS.call_with_result_mut(error, handle, |conn| {
+    CONNECTIONS.call_with_result_mut(error, handle, |conn| -> Result<String> {
         let options = conn.options.clone();
         let channel = ffi_support::rust_str_from_c(channel_id);
         let key = options.vapid_key;
         let reg_token = options.registration_id.unwrap();
         let subscription_key = Crypto::generate_key().unwrap();
-        let auth_bytes = match crypto::get_bytes(SER_AUTH_LENGTH) {
-            Ok(v) => v,
-            Err(e) => {
-                return Err(ExternError::new_error(*ERROR_CODE, format!("{:?}", e)));
-            }
-        };
+        let auth_bytes = crypto::get_bytes(SER_AUTH_LENGTH)?;
         let auth = base64::encode_config(&auth_bytes, base64::URL_SAFE_NO_PAD);
         // Don't auto add the subscription to the db.
         // (endpoint updates also call subscribe and should be lighter weight)
-        let info = conn
-            .subscribe(channel)
-            .map_err(|e| ExternError::new_error(*ERROR_CODE, format!("{:?}", e)))?;
+        let info = conn.subscribe(channel)?;
         // store the channelid => auth + subscription_key
         let mut record = storage::PushRecord::new(
             &info.uaid,
@@ -117,8 +110,7 @@ pub unsafe extern "C" fn push_get_subscription_info(
         record.app_server_key = key.clone();
         record.native_id = Some(reg_token);
         conn.database
-            .put_record(&record)
-            .map_err(|e| ExternError::new_error(*ERROR_CODE, format!("{:?}", e)))?;
+            .put_record(&record)?;
         let subscription_info = json!({
             "endpoint": info.endpoint,
             "keys": {
@@ -139,12 +131,9 @@ pub unsafe extern "C" fn push_unsubscribe(
     error: &mut ExternError,
 ) -> u8 {
     log::debug!("push_unsubscribe");
-    CONNECTIONS.call_with_result_mut(error, handle, |conn| {
+    CONNECTIONS.call_with_result_mut(error, handle, |conn| -> Result<bool> {
         let channel = ffi_support::opt_rust_str_from_c(channel_id);
-        match conn.unsubscribe(channel) {
-            Ok(v) => Ok(v),
-            Err(e) => Err(ExternError::new_error(*ERROR_CODE, format!("{:?}", e))),
-        }
+         conn.unsubscribe(channel)
     })
 }
 
@@ -164,7 +153,7 @@ pub unsafe extern "C" fn push_update(
         }
         Err(ExternError::new_error(
             *ERROR_CODE,
-            format!("Missing new token"),
+            format!("Missing new token")
         ))
     })
 }
