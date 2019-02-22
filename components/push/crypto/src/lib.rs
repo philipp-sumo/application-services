@@ -12,6 +12,11 @@ use base64;
 use std::clone;
 use std::cmp;
 use std::fmt;
+use std::os::raw::c_char;
+use std::ptr;
+
+use ffi_support::{rust_string_to_c, IntoFfi};
+use serde_json;
 
 use ece::{
     Aes128GcmEceWebPushImpl, AesGcmEceWebPushImpl, AesGcmEncryptedBlock, LocalKeyPair,
@@ -22,6 +27,7 @@ use openssl::rand::rand_bytes;
 use push_errors as error;
 
 pub const SER_AUTH_LENGTH: usize = 16;
+pub type Decrypted = Vec<u8>;
 
 /* build the key off of the OpenSSL key implementation.
  * Much of this is taken from rust_ece/crypto/openssl/lib.rs
@@ -153,7 +159,7 @@ pub trait Cryptography {
         encoding: &str,
         salt: Option<Vec<u8>>,
         dh: Option<Vec<u8>>,
-    ) -> error::Result<Vec<u8>>;
+    ) -> error::Result<Decrypted>;
     // IIUC: objects created on one side of FFI can't be freed on the other side, so we have to use references (or clone)
 
     /// Decrypt the obsolete "aesgcm" format (which is still used by a number of providers)
@@ -162,10 +168,10 @@ pub trait Cryptography {
         content: &[u8],
         salt: Option<Vec<u8>>,
         crypto_key: Option<Vec<u8>>,
-    ) -> error::Result<Vec<u8>>;
+    ) -> error::Result<Decrypted>;
 
     /// Decrypt the RFC 8188 format.
-    fn decrypt_aes128gcm(key: &Key, content: &[u8]) -> error::Result<Vec<u8>>;
+    fn decrypt_aes128gcm(key: &Key, content: &[u8]) -> error::Result<Decrypted>;
 }
 
 pub struct Crypto;
@@ -214,7 +220,7 @@ impl Cryptography for Crypto {
         encoding: &str,
         salt: Option<Vec<u8>>,
         dh: Option<Vec<u8>>,
-    ) -> error::Result<Vec<u8>> {
+    ) -> error::Result<Decrypted> {
         // convert the private key into something useful.
         match encoding.to_lowercase().as_str() {
             "aesgcm" => Self::decrypt_aesgcm(&key, &body, salt, dh),
@@ -229,7 +235,7 @@ impl Cryptography for Crypto {
         content: &[u8],
         salt: Option<Vec<u8>>,
         crypto_key: Option<Vec<u8>>,
-    ) -> error::Result<Vec<u8>> {
+    ) -> error::Result<Decrypted> {
         let dh = match crypto_key {
             Some(v) => v,
             None => {

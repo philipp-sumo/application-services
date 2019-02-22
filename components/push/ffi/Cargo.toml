@@ -16,8 +16,9 @@ ffi-support = { path = "../../support/ffi" }
 lazy_static = "1.2.0"
 base64 = "0.10"
 
-config = { path = "../config"}
+config = { path = "../config" }
 crypto = { path = "../crypto" }
+push-errors = {path = "../error" }
 storage = { path = "../storage" }
 communications = { path = "../communications" }
 
