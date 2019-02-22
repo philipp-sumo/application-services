@@ -101,11 +101,46 @@ protobuf {
     }
 }
 
+configurations {
+    // There's an interaction between Gradle's resolution of dependencies with different types
+    // (@jar, @aar) for `implementation` and `testImplementation` and with Android Studio's built-in
+    // JUnit test runner.  The runtime classpath in the built-in JUnit test runner gets the
+    // dependency from the `implementation`, which is type @aar, and therefore the JNA dependency
+    // doesn't provide the JNI dispatch libraries in the correct Java resource directories.  I think
+    // what's happening is that @aar type in `implementation` resolves to the @jar type in
+    // `testImplementation`, and that it wins the dependency resolution battle.
+    //
+    // A workaround is to add a new configuration which depends on the @jar type and to reference
+    // the underlying JAR file directly in `testImplementation`.  This JAR file doesn't resolve to
+    // the @aar type in `implementation`.  This works when invoked via `gradle`, but also sets the
+    // correct runtime classpath when invoked with Android Studio's built-in JUnit test runner.
+    // Success!
+    jnaForTest
+}
+
 dependencies {
     implementation 'net.java.dev.jna:jna:4.5.2@aar'
+
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+    implementation 'net.java.dev.jna:jna:4.5.2@aar'
     implementation 'com.google.protobuf:protobuf-lite:3.0.0'
+
     implementation project(':as-support-library')
+
+    // For reasons unknown, resolving the jnaForTest configuration directly
+    // trips a nasty issue with the Android-Gradle plugin 3.2.1, like `Cannot
+    // change attributes of configuration ':PROJECT:kapt' after it has been
+    // resolved`.  I think that the configuration is being made a
+    // super-configuration of the testImplementation and then the `.files` is
+    // causing it to be resolved.  Cloning first dissociates the configuration,
+    // avoiding other configurations from being resolved.  Tricky!
+    testImplementation files(configurations.jnaForTest.copyRecursive().files)
+    testImplementation 'junit:junit:4.12'
+    testImplementation 'org.robolectric:robolectric:3.8'
+    testImplementation 'org.mockito:mockito-core:2.21.0'
+
+    androidTestImplementation 'com.android.support.test:runner:1.0.2'
+    androidTestImplementation 'com.android.support.test.espresso:espresso-core:3.0.2'
 }
 
 afterEvaluate {
@@ -120,8 +155,8 @@ afterEvaluate {
             tasks["generate${productFlavor}${buildType}Assets"].dependsOn(tasks["cargoBuild"])
         }
 
-        // TODO: For unit tests.
-        // tasks["process${productFlavor}${buildType}UnitTestJavaRes"].dependsOn(tasks["cargoBuild"])
+        // For unit tests.
+        tasks["process${productFlavor}${buildType}UnitTestJavaRes"].dependsOn(tasks["cargoBuild"])
     }
 }
 
@@ -130,6 +165,6 @@ ext.configurePublish(
         'org.mozilla.fxaclient',
         'fxaclient',
         'Firefox Accounts client.',
-        /* jnaForTestConfiguration= */ null,
+        /* jnaForTestConfiguration= */ configurations.jnaForTest,
         /* variantWithoutLib= */ 'androidWithoutLib',
 )

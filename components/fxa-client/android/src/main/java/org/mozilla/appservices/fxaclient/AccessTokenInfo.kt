@@ -2,10 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-package org.mozilla.fxaclient.internal
+package org.mozilla.appservices.fxaclient
 
 import com.sun.jna.Pointer
 import com.sun.jna.Structure
+import org.mozilla.appservices.fxaclient.rust.LibFxAFFI
 import java.util.*
 
 class AccessTokenInfo internal constructor(raw: Raw) {
@@ -37,7 +38,7 @@ class AccessTokenInfo internal constructor(raw: Raw) {
             this.key = raw.key?.getRustString()
             this.expiresAt = raw.expiresAt
         } finally {
-            FxaClient.INSTANCE.fxa_oauth_info_free(raw.pointer)
+            LibFxAFFI.INSTANCE.fxa_oauth_info_free(raw.pointer)
         }
     }
 }
