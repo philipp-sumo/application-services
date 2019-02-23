@@ -24,6 +24,8 @@ pub trait Storage {
     fn get_channel_list(&self, uaid: &str) -> Result<Vec<String>>;
 
     fn update_endpoint(&self, uaid: &str, channel_id: &str, endpoint: &str) -> Result<bool>;
+
+    fn update_native_id(&self, uaid: &str, native_id: &str) -> Result<bool>;
 }
 
 pub struct PushDb {
@@ -70,7 +72,7 @@ impl Storage for PushDb {
         Ok(self.try_query_row(
             &query,
             &[(":uaid", &uaid as &ToSql),
-              (":chid", &chid as &ToSql)],
+                (":chid", &chid as &ToSql)],
             PushRecord::from_row,
             false,
         )?)
@@ -113,7 +115,7 @@ impl Storage for PushDb {
             "DELETE FROM push_record
              WHERE uaid = :uaid AND channel_id = :chid",
             &[(":uaid", &uaid as &ToSql),
-              (":chid", &chid as &ToSql)],
+                (":chid", &chid as &ToSql)],
         )?;
         Ok(affected_rows == 1)
     }
@@ -141,6 +143,13 @@ impl Storage for PushDb {
                 (":channel_id", &channel_id.to_owned()),
             ],
         )?;
+        Ok(affected_rows == 1)
+    }
+
+    fn update_native_id(&self, uaid: &str, native_id: &str) -> Result<bool> {
+        let affected_rows = self.execute_named(
+            "UPDATE push_record set native_id = :native_id WHERE uaid = :uaid",
+            &[(":native_id", &native_id.to_owned()), (":uaid", &uaid.to_owned())], )?;
         Ok(affected_rows == 1)
     }
 }

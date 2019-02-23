@@ -12,11 +12,6 @@ use base64;
 use std::clone;
 use std::cmp;
 use std::fmt;
-use std::os::raw::c_char;
-use std::ptr;
-
-use ffi_support::{rust_string_to_c, IntoFfi};
-use serde_json;
 
 use ece::{
     Aes128GcmEceWebPushImpl, AesGcmEceWebPushImpl, AesGcmEncryptedBlock, LocalKeyPair,

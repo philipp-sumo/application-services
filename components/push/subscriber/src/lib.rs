@@ -10,32 +10,18 @@ extern crate storage;
 
 use std::collections::HashMap;
 
-use base64;
 
 use config::PushConfiguration;
 use communications::{ConnectHttp, Connection, RegisterResponse, connect};
-use crypto::{Crypto, Cryptography, Key, SER_AUTH_LENGTH};
+use crypto::{Crypto, Cryptography, Key};
 use storage::{Storage, Store};
 
 use push_errors::{self as error, Result};
 
-/*
-pub struct SubscriptionKeys {
-    pub auth: Vec<u8>,
-    pub p256dh: Vec<u8>,
-}
-
-// Subscription structure
-pub struct Subscription {
-    pub channelid: ChannelID,
-    pub endpoint: String,
-    pub keys: SubscriptionKeys,
-}
-*/
 pub struct PushManager {
     config: PushConfiguration,
-    conn: ConnectHttp,
-    store: Store,
+    pub conn: ConnectHttp,
+    pub store: Store,
 }
 
 impl PushManager {
@@ -54,14 +40,11 @@ impl PushManager {
 
     // XXX: make these trait methods
     // XXX: should be called subscribe?
-    pub fn get_subscription_info(&mut self, channel_id: &str, scope: &str) -> Result<RegisterResponse> {
+    pub fn subscribe(&mut self, channel_id: &str, scope: &str) -> Result<(RegisterResponse, Key)> {
         //let key = self.config.vapid_key;
         let reg_token = self.config.registration_id.clone().unwrap();
         let subscription_key = Crypto::generate_key().unwrap();
-        let auth =
-            base64::encode_config(&crypto::get_bytes(SER_AUTH_LENGTH)?,
-                                  base64::URL_SAFE_NO_PAD);
-       let info = self.conn.subscribe(channel_id)?;
+        let info = self.conn.subscribe(channel_id)?;
         // store the channelid => auth + subscription_key
         let mut record = storage::PushRecord::new(
             &info.uaid,
@@ -73,7 +56,8 @@ impl PushManager {
         record.app_server_key = self.config.vapid_key.clone();
         record.native_id = Some(reg_token);
         self.store.put_record(&record)?;
-        Ok(info)
+        // TODO: just return Record
+        Ok((info, subscription_key))
     }
 
     // XXX: maybe -> Result<()> instead
@@ -83,85 +67,35 @@ impl PushManager {
         self.store.delete_record(self.conn.uaid.as_ref().unwrap(), channel_id.unwrap())?;
         Ok(result)
     }
-}
 
-/*
-pub trait Subscriber {
-    // get a new subscription (including keys, endpoint, etc.)
-    // note if this is a "priviledged" system call that does not require additional decryption
-    fn get_subscription<S: Storage>(
-        storage: S,
-        origin_attributes: HashMap<String, String>, // Does this include the origin proper?
-        app_server_key: Option<&str>,               // Passed to server.
-        registration_key: Option<&str>,             // Local OS push registration ID
-        priviledged: bool,                          // Is this a system call / skip encryption?
-    ) -> Result<Subscription, SubscriptionError>;
+    pub fn update(&mut self, new_token: &str) -> error::Result<bool> {
+        let result = self.conn.update(&new_token)?;
+        self.store.update_native_id(self.conn.uaid.as_ref().unwrap(), new_token)?;
+        Ok(result)
+    }
 
-    // Update an existing subscription (change bridge endpoint)
-    fn update_subscription<S: Storage>(
-        storage: S,
-        chid: ChannelID,
-        bridge_id: Option<String>,
-    ) -> Result<Subscription, SubscriptionError>;
+    pub fn verify_connection(&self) -> error::Result<bool> {
+        let channels = self.store.get_channel_list(self.conn.uaid.as_ref().unwrap())?;
+        self.conn.verify_connection(&channels)
+    }
 
-    // remove a subscription
-    fn del_subscription<S: Storage>(store: S, chid: ChannelID) -> Result<bool, SubscriptionError>;
-
-    // to_json -> impl Into::<String> for Subscriber...
-}
-
-// TODO: transplant the work of our ffi calls into Subscriber
-// pass Subscriber around as *the* handle exposed via ffi
-// plus the
-impl Subscriber for PushManager {
-  fn get_subscription<S: Storage>(
-        storage: S,
-        origin_attributes: HashMap<String, String>,
-        app_server_key: Option<&str>,
-        registration_key: Option<&str>,
-        priviledged: bool,
-    ) -> Result<Subscription, SubscriptionError> {
-        if let Ok(con) = ConnectHttp::connect::<ConnectHttp>(None) {
-            let uaid = con.uaid();
-            let chid = storage.generate_channel_id();
-            if let Ok(endpoint_data) = con.subscribe(&chid, app_server_key, registration_key) {
-                let private_key = Crypto::generate_key().unwrap();
-                storage.create_record(
-                    &uaid,
-                    &chid,
-                    origin_attributes,
-                    &endpoint_data.endpoint,
-                    &con.auth,
-                    &private_key,
-                    priviledged,
-                );
-                return Ok(Subscription {
-                    channelid: chid,
-                    endpoint: endpoint_data.endpoint.clone(),
-                    keys: SubscriptionKeys {
-                        p256dh: private_key.public.clone(),
-                        auth: private_key.auth.clone(),
-                    },
-                });
-            }
+    /// Fetch new endpoints for a list of channels.
+    pub fn regenerate_endpoints(
+        &mut self,
+    ) -> error::Result<HashMap<String, String>> {
+        let uaid = self.conn.uaid.clone().unwrap();
+        let channels = self.store.get_channel_list(&uaid)?;
+        let mut results: HashMap<String, String> = HashMap::new();
+        for channel in channels {
+            let info = self.conn.subscribe(
+                &channel)?;
+            self.store.update_endpoint(&uaid, &channel, &info.endpoint)?;
+            results.insert(channel.clone(), info.endpoint);
         }
-        Err(SubscriptionError)
-    }
-
-    fn update_subscription<S: Storage>(
-        storage: S,
-        chid: ChannelID,
-        bridge_id: Option<String>,
-    ) -> Result<Subscription, SubscriptionError> {
-        Err(SubscriptionError)
-    }
-
-    // remove a subscription
-    fn del_subscription<S: Storage>(store: S, chid: ChannelID) -> Result<bool, SubscriptionError> {
-        Ok(false)
+        Ok(results)
     }
 }
-*/
+
 
 #[cfg(test)]
 mod test {
@@ -180,8 +114,8 @@ mod test {
     #[test]
     fn basic() -> Result<()> {
         let mut pm = PushManager::new(Default::default())?;
-        pm.get_subscription_info(DUMMY_CHID, "http://example.com/test-scope")?;
-        pm.unsubscribe(Some(DUMMY_CHID))?;
+        //pm.subscribe(DUMMY_CHID, "http://example.com/test-scope")?;
+        //pm.unsubscribe(Some(DUMMY_CHID))?;
         Ok(())
     }
 }

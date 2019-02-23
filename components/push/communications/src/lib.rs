@@ -24,7 +24,6 @@ use push_errors as error;
 use push_errors::ErrorKind::{
     AlreadyRegisteredError, CommunicationError, CommunicationServerError,
 };
-use storage::{Store, Storage};
 
 #[derive(Debug)]
 pub struct RegisterResponse {
@@ -69,15 +68,7 @@ pub trait Connection {
 
     // Verify that the known channel list matches up with the server list. If this fails, regenerate endpoints.
     // This should be performed once a day.
-    fn verify_connection(&self) -> error::Result<bool>;
-
-    // Regenerate the subscription info for all known, registered channelids
-    // Returns HashMap<ChannelID, Endpoint>>
-    // In The Future: This should be called by a subscription manager that bundles the returned endpoint along
-    // with keys in a Subscription Info object {"endpoint":..., "keys":{"p256dh": ..., "auth": ...}}
-    fn regenerate_endpoints(
-        &mut self,
-    ) -> error::Result<HashMap<String, String>>;
+    fn verify_connection(&self, channels: &[String]) -> error::Result<bool>;
 
     // Add one or more new broadcast subscriptions.
     fn broadcast_subscribe(&self, broadcast: BroadcastValue) -> error::Result<BroadcastValue>;
@@ -93,7 +84,7 @@ pub trait Connection {
 pub struct ConnectHttp {
     pub options: PushConfiguration,
     client: reqwest::Client,
-    pub database: Store,
+    // pub database: Store,
     pub uaid: Option<String>,
     pub auth: Option<String>, // Server auth token
 }
@@ -112,12 +103,15 @@ pub fn connect(options: PushConfiguration) -> error::Result<ConnectHttp> {
     };
     if options.bridge_type.is_some() && options.registration_id.is_none() {
         return Err(error::ErrorKind::GeneralError(
-            "Missing Registration ID, please register with OS first".to_owned()).into());
+            "Missing Registration ID, please register with OS first".to_owned(),
+        )
+        .into());
     };
-    let database = match options.database_path.clone() {
-        None => Store::open_in_memory()?,
-        Some(path) => Store::open(path)?,
-    };
+    /*    let database = match options.database_path.clone() {
+            None => Store::open_in_memory()?,
+            Some(path) => Store::open(path)?,
+        };
+    */
     let connection = ConnectHttp {
         uaid: None,
         options: options.clone(),
@@ -130,7 +124,7 @@ pub fn connect(options: PushConfiguration) -> error::Result<ConnectHttp> {
                 return Err(CommunicationError(format!("Could not build client: {:?}", e)).into());
             }
         },
-        database,
+        //        database,
         auth: None,
     };
 
@@ -139,10 +133,7 @@ pub fn connect(options: PushConfiguration) -> error::Result<ConnectHttp> {
 
 impl Connection for ConnectHttp {
     /// send a new subscription request to the server, get back the server registration response.
-    fn subscribe(
-        &mut self,
-        channelid: &str,
-        ) -> error::Result<RegisterResponse> {
+    fn subscribe(&mut self, channelid: &str) -> error::Result<RegisterResponse> {
         // check that things are set
         if self.options.http_protocol.is_none() || self.options.bridge_type.is_none() {
             return Err(
@@ -214,7 +205,6 @@ impl Connection for ConnectHttp {
         if self.uaid.is_none() {
             return Err(CommunicationError("No UAID set".into()).into());
         }
-        let uaid = self.uaid.clone().unwrap();
         let options = self.options.clone();
         let mut url = format!(
             "{}://{}/v1/{}/{}/registration/{}",
@@ -236,16 +226,7 @@ impl Connection for ConnectHttp {
             )
             .send()
         {
-            Ok(_) => {
-                return Ok(match channel_id {
-                    None => {
-                        self.database.delete_all_records(&uaid)?;
-                        true
-                    },
-                    Some(channel) =>{
-                        self.database.delete_record(&uaid, &channel)?}
-                })
-            },
+            Ok(_) => return Ok(true),
             Err(e) => {
                 Err(CommunicationServerError(format!("Could not unsubscribe: {:?}", e)).into())
             }
@@ -370,7 +351,7 @@ impl Connection for ConnectHttp {
     /// should force the client to drop the old UAID, request a new UAID from the server, and
     /// resubscribe all channelids, resulting in new endpoints. This will require sending the
     /// new endpoints to the channel recipient functions.
-    fn verify_connection(&self) -> error::Result<bool> {
+    fn verify_connection(&self, channels: &[String]) -> error::Result<bool> {
         if self.auth.is_none() {
             return Err(CommunicationError("Connection uninitiated".to_owned()).into());
         }
@@ -382,29 +363,11 @@ impl Connection for ConnectHttp {
                 );
             }
         };
-        let channels = self.database.get_channel_list(&self.uaid.clone().unwrap())?;
+        //let channels = self.database.get_channel_list(&self.uaid.clone().unwrap())?;
         // verify both lists match. Either side could have lost it's mind.
-        Ok(remote == channels)
+        Ok(remote == channels.to_vec())
     }
 
-    /// Fetch new endpoints for a list of channels.
-    fn regenerate_endpoints(
-        &mut self,
-    ) -> error::Result<HashMap<String, String>> {
-        if self.uaid.is_none() {
-            return Err(CommunicationError("Connection uninitiated".to_owned()).into());
-        }
-        let uaid = self.uaid.clone().unwrap();
-        let channels = self.database.get_channel_list(&uaid)?;
-        let mut results: HashMap<String, String> = HashMap::new();
-        for channel in channels {
-            let info = self.subscribe(
-                &channel)?;
-            self.database.update_endpoint(&uaid, &channel, &info.endpoint)?;
-            results.insert(channel.clone(), info.endpoint);
-        }
-        Ok(results)
-    }
     //impl TODO: Handle a Ping response with updated Broadcasts.
     //impl TODO: Handle an incoming Notification
 }
@@ -419,8 +382,8 @@ mod test {
     use mockito::{mock, server_address};
     use serde_json::json;
 
-    use storage::{Storage, PushRecord};
     use crypto::{Crypto, Cryptography};
+    use storage::{PushRecord, Storage};
 
     // use crypto::{get_bytes, Key};
 
@@ -434,6 +397,7 @@ mod test {
     fn test_success() {
         // mockito forces task serialization, so for now, we test everything in one go.
         // SUBSCRIPTION
+
         {
             let body = json!({
                 "uaid": DUMMY_UAID,
@@ -469,7 +433,6 @@ mod test {
         }
         // UNSUBSCRIPTION - Single channel
         {
-
             let ap_mock = mock(
                 "DELETE",
                 format!(
@@ -494,14 +457,6 @@ mod test {
             let mut conn = connect(config).unwrap();
             conn.uaid = Some(DUMMY_UAID.to_owned());
             conn.auth = Some(SECRET.to_owned());
-            //TODO: Add record to nuke.
-            conn.database.put_record(&PushRecord::new(
-                DUMMY_UAID,
-                DUMMY_CHID,
-                "http://example.com/push",
-                "",
-                Crypto::generate_key().unwrap()
-            )).expect("Couldn't init db");
             let response = conn.unsubscribe(Some(DUMMY_CHID)).unwrap();
             ap_mock.assert();
             assert!(response);
@@ -529,13 +484,6 @@ mod test {
             conn.uaid = Some(DUMMY_UAID.to_owned());
             conn.auth = Some(SECRET.to_owned());
             //TODO: Add record to nuke.
-            conn.database.put_record(&PushRecord::new(
-                DUMMY_UAID,
-                DUMMY_CHID,
-                "http://example.com/push",
-                "",
-                Crypto::generate_key().unwrap()
-            )).expect("Couldn't init db");
             let response = conn.unsubscribe(None).unwrap();
             ap_mock.assert();
             assert!(response);

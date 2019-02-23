@@ -3,8 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use ffi_support::{
-    define_handle_map_deleter, define_string_destructor, rust_str_from_c, ConcurrentHandleMap,
-    ErrorCode, ExternError,
+    define_handle_map_deleter, define_string_destructor, ConcurrentHandleMap, ExternError,
 };
 use std::os::raw::c_char;
 // use sync15::telemetry;
@@ -13,10 +12,10 @@ use base64;
 use lazy_static;
 use serde_json::{self, json};
 
-use communications::{connect, ConnectHttp, Connection};
 use config::PushConfiguration;
-use crypto::{self, Crypto, Cryptography, SER_AUTH_LENGTH};
+use crypto::{self, Cryptography};
 use push_errors::{self, Result};
+use subscriber::PushManager;
 use storage::Storage;
 
 #[no_mangle]
@@ -34,7 +33,7 @@ pub extern "C" fn push_enable_logcat_logging() {
 }
 
 lazy_static::lazy_static! {
-    static ref CONNECTIONS: ConcurrentHandleMap<ConnectHttp> = ConcurrentHandleMap::new();
+    static ref MANAGER: ConcurrentHandleMap<PushManager> = ConcurrentHandleMap::new();
 }
 
 /// Instantiate a Http connection. Returned connection must be freed with
@@ -59,61 +58,48 @@ pub unsafe extern "C" fn push_connection_new(
     );
     // return this as a reference to the map since that map contains the actual handles that rust uses.
     // see ffi layer for details.
-    CONNECTIONS.insert_with_result(error, || {
-        let host = ffi_support::rust_string_from_c(server_host);
-        let protocol = ffi_support::opt_rust_string_from_c(socket_protocol);
-        let reg_id = ffi_support::opt_rust_string_from_c(registration_id);
-        let bridge = ffi_support::opt_rust_string_from_c(bridge_type);
-        let sender = ffi_support::rust_string_from_c(sender_id);
-        let db_path = ffi_support::opt_rust_string_from_c(database_path);
-        let config = PushConfiguration {
-            server_host: host,
-            http_protocol: protocol,
-            bridge_type: bridge,
-            registration_id: reg_id,
-            sender_id: sender,
-            database_path: db_path,
-            ..Default::default()
-        };
-        connect(config)
+    let host = ffi_support::rust_string_from_c(server_host);
+    let protocol = ffi_support::opt_rust_string_from_c(socket_protocol);
+    let reg_id = ffi_support::opt_rust_string_from_c(registration_id);
+    let bridge = ffi_support::opt_rust_string_from_c(bridge_type);
+    let sender = ffi_support::rust_string_from_c(sender_id);
+    let db_path = ffi_support::opt_rust_string_from_c(database_path);
+    let config = PushConfiguration {
+        server_host: host,
+        http_protocol: protocol,
+        bridge_type: bridge,
+        registration_id: reg_id,
+        sender_id: sender,
+        database_path: db_path,
+        ..Default::default()
+    };
+    MANAGER.insert_with_result(error, || {
+        PushManager::new(config.clone())
     })
-}
+    }
 
 // Add a subscription
 /// Errors are logged.
 #[no_mangle]
-pub unsafe extern "C" fn push_get_subscription_info(
+pub unsafe extern "C" fn push_subscribe(
     handle: u64,
     channel_id: *const c_char,
+    scope: *const c_char,
     error: &mut ExternError,
 ) -> *mut c_char {
     log::debug!("push_get_subscription");
-    CONNECTIONS.call_with_result_mut(error, handle, |conn| -> Result<String> {
-        let options = conn.options.clone();
+    MANAGER.call_with_result_mut(error, handle, |mgr| -> Result<String> {
         let channel = ffi_support::rust_str_from_c(channel_id);
-        let key = options.vapid_key;
-        let reg_token = options.registration_id.unwrap();
-        let subscription_key = Crypto::generate_key().unwrap();
-        let auth_bytes = crypto::get_bytes(SER_AUTH_LENGTH)?;
-        let auth = base64::encode_config(&auth_bytes, base64::URL_SAFE_NO_PAD);
+        let scope_s = ffi_support::rust_str_from_c(scope);
         // Don't auto add the subscription to the db.
         // (endpoint updates also call subscribe and should be lighter weight)
-        let info = conn.subscribe(channel)?;
+        let (info, subscription_key) = mgr.subscribe(channel, scope_s)?;
         // store the channelid => auth + subscription_key
-        let mut record = storage::PushRecord::new(
-            &info.uaid,
-            &channel,
-            &info.endpoint,
-            "",
-            subscription_key.clone(),
-        );
-        record.app_server_key = key.clone();
-        record.native_id = Some(reg_token);
-        conn.database.put_record(&record)?;
         let subscription_info = json!({
             "endpoint": info.endpoint,
             "keys": {
-                "auth": auth,
+                "auth": base64::encode_config(&subscription_key.auth,
+                                              base64::URL_SAFE_NO_PAD),
                 "p256dh": base64::encode_config(&subscription_key.public,
                                                 base64::URL_SAFE_NO_PAD)
             }
@@ -130,9 +116,9 @@ pub unsafe extern "C" fn push_unsubscribe(
     error: &mut ExternError,
 ) -> u8 {
     log::debug!("push_unsubscribe");
-    CONNECTIONS.call_with_result_mut(error, handle, |conn| -> Result<bool> {
+    MANAGER.call_with_result_mut(error, handle, |mgr| -> Result<bool> {
         let channel = ffi_support::opt_rust_str_from_c(channel_id);
-        conn.unsubscribe(channel)
+        mgr.unsubscribe(channel)
     })
 }
 
@@ -144,17 +130,12 @@ pub unsafe extern "C" fn push_update(
     error: &mut ExternError,
 ) -> u8 {
     log::debug!("push_update");
-    CONNECTIONS.call_with_result_mut(error, handle, |conn| {
+    MANAGER.call_with_result_mut(error, handle, |mgr| -> Result<_> {
         if let Some(token) = ffi_support::opt_rust_str_from_c(new_token) {
-            return Ok(conn.update(&token).map_err(|e| {
-                let err = push_errors::ErrorKind::TranscodingError(format!("{:?}", e));
-                ExternError::new_error(err.error_code(), err.to_string())
-            })?);
+            mgr.update(&token)
+        } else {
+            Err(push_errors::ErrorKind::MissingRegistrationTokenError.into())
         }
-        Err(ExternError::new_error(
-            push_errors::ErrorKind::MissingRegistrationTokenError.error_code(),
-            format!("Missing new registration token"),
-        ))
     })
 }
 
@@ -167,14 +148,13 @@ pub unsafe extern "C" fn push_verify_connection(
     error: &mut ExternError,
 ) -> *mut c_char {
     log::debug!("push_verify");
-    CONNECTIONS.call_with_result_mut(error, handle, |conn| {
-        if let Ok(r) = conn.verify_connection() {
+    MANAGER.call_with_result_mut(error, handle, |mgr| -> Result<_> {
+        if let Ok(r) = mgr.verify_connection() {
             if r == false {
-                if let Ok(new_endpoints) = conn.regenerate_endpoints() {
+                if let Ok(new_endpoints) = mgr.regenerate_endpoints() {
                     // use a `match` here to resolve return of <_>
                     return serde_json::to_string(&new_endpoints).map_err(|e| {
-                        let err = push_errors::ErrorKind::TranscodingError(format!("{:?}", e));
-                        ExternError::new_error(err.error_code(), err.to_string())
+                        push_errors::ErrorKind::TranscodingError(format!("{:?}", e)).into()
                     });
                 }
             }
@@ -194,7 +174,7 @@ pub unsafe extern "C" fn push_decrypt(
     error: &mut ExternError,
 ) -> *mut c_char {
     log::debug!("push_decrypt");
-    CONNECTIONS.call_with_result_mut(error, handle, |conn| {
+    MANAGER.call_with_result_mut(error, handle, |mgr| {
         let r_chid = ffi_support::rust_str_from_c(chid);
         let r_body = ffi_support::rust_str_from_c(body)
             .to_owned()
@@ -205,8 +185,8 @@ pub unsafe extern "C" fn push_decrypt(
             ffi_support::opt_rust_str_from_c(salt).map(|v| v.as_bytes().to_vec());
         let r_dh: Option<Vec<u8>> =
             ffi_support::opt_rust_str_from_c(dh).map(|v| v.as_bytes().to_vec());
-        let uaid = conn.uaid.clone().unwrap();
-        match conn.database.get_record(&uaid, r_chid) {
+        let uaid = mgr.conn.uaid.clone().unwrap();
+        match mgr.store.get_record(&uaid, r_chid) {
             Err(e) => Err({
                 let err = push_errors::ErrorKind::StorageError(format!("{:?}", e));
                 ExternError::new_error(err.error_code(), err.to_string())
@@ -230,7 +210,7 @@ pub unsafe extern "C" fn push_decrypt(
                 };
                 let err = push_errors::ErrorKind::StorageError(format!(
                     "No record for uaid:chid {:?}:{:?}",
-                    conn.uaid, chid
+                    mgr.conn.uaid, chid
                 ));
                 Err(ExternError::new_error(err.error_code(), err.to_string()))
             }
@@ -240,5 +220,5 @@ pub unsafe extern "C" fn push_decrypt(
 // TODO: modify these to be relevant.
 
 define_string_destructor!(push_destroy_string);
-define_handle_map_deleter!(CONNECTIONS, push_connection_destroy);
+define_handle_map_deleter!(MANAGER, push_connection_destroy);
 // define_box_destructor!(PlacesInterruptHandle, places_interrupt_handle_destroy);

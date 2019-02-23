@@ -41,7 +41,7 @@ impl Default for PushConfiguration {
             // socket_protocol: String::from("wss"),
             socket_protocol: None,
             http_protocol: Some(String::from("https")),
-            bridge_type: None,
+            bridge_type: Some(String::from("fcm")),
             registration_id: Some(String::from("deafbeef00000000")),
             vapid_key: None,
             enabled: true,
