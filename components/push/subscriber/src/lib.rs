@@ -10,9 +10,8 @@ extern crate storage;
 
 use std::collections::HashMap;
 
-
+use communications::{connect, ConnectHttp, Connection, RegisterResponse};
 use config::PushConfiguration;
-use communications::{ConnectHttp, Connection, RegisterResponse, connect};
 use crypto::{Crypto, Cryptography, Key};
 use storage::{Storage, Store};
 
@@ -34,7 +33,7 @@ impl PushManager {
         Ok(PushManager {
             config: config.clone(),
             conn: connect(config)?,
-            store
+            store,
         })
     }
 
@@ -64,38 +63,39 @@ impl PushManager {
     // XXX: maybe handle channel_id None case separately?
     pub fn unsubscribe(&self, channel_id: Option<&str>) -> Result<bool> {
         let result = self.conn.unsubscribe(channel_id)?;
-        self.store.delete_record(self.conn.uaid.as_ref().unwrap(), channel_id.unwrap())?;
+        self.store
+            .delete_record(self.conn.uaid.as_ref().unwrap(), channel_id.unwrap())?;
         Ok(result)
     }
 
     pub fn update(&mut self, new_token: &str) -> error::Result<bool> {
         let result = self.conn.update(&new_token)?;
-        self.store.update_native_id(self.conn.uaid.as_ref().unwrap(), new_token)?;
+        self.store
+            .update_native_id(self.conn.uaid.as_ref().unwrap(), new_token)?;
         Ok(result)
     }
 
     pub fn verify_connection(&self) -> error::Result<bool> {
-        let channels = self.store.get_channel_list(self.conn.uaid.as_ref().unwrap())?;
+        let channels = self
+            .store
+            .get_channel_list(self.conn.uaid.as_ref().unwrap())?;
         self.conn.verify_connection(&channels)
     }
 
     /// Fetch new endpoints for a list of channels.
-    pub fn regenerate_endpoints(
-        &mut self,
-    ) -> error::Result<HashMap<String, String>> {
+    pub fn regenerate_endpoints(&mut self) -> error::Result<HashMap<String, String>> {
         let uaid = self.conn.uaid.clone().unwrap();
         let channels = self.store.get_channel_list(&uaid)?;
         let mut results: HashMap<String, String> = HashMap::new();
         for channel in channels {
-            let info = self.conn.subscribe(
-                &channel)?;
-            self.store.update_endpoint(&uaid, &channel, &info.endpoint)?;
+            let info = self.conn.subscribe(&channel)?;
+            self.store
+                .update_endpoint(&uaid, &channel, &info.endpoint)?;
             results.insert(channel.clone(), info.endpoint);
         }
         Ok(results)
     }
 }
-
 
 #[cfg(test)]
 mod test {

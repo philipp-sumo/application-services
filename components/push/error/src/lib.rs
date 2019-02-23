@@ -8,8 +8,8 @@ use std::result;
 use rusqlite;
 
 use failure::{Backtrace, Context, Fail};
-use lazy_static;
 use ffi_support;
+use lazy_static;
 
 lazy_static::lazy_static! {
     pub static ref ERROR_CODE: ffi_support::ErrorCode = ffi_support::ErrorCode::new(-8675309);
@@ -76,10 +76,7 @@ impl From<openssl::error::ErrorStack> for Error {
 
 impl From<Error> for ffi_support::ExternError {
     fn from(e: Error) -> ffi_support::ExternError {
-        ffi_support::ExternError::new_error(
-            e.kind().error_code(),
-            format!("{:?}", e)
-        )
+        ffi_support::ExternError::new_error(e.kind().error_code(), format!("{:?}", e))
     }
 }
 
@@ -147,7 +144,6 @@ pub enum ErrorKind {
 
     #[fail(display = "Encryption Error: {}", _0)]
     EncryptionError(String),
-
 }
 
 impl ErrorKind {
@@ -162,9 +158,8 @@ impl ErrorKind {
             ErrorKind::StorageError(_) => 28,
             ErrorKind::StorageSqlError(_) => 29,
             ErrorKind::MissingRegistrationTokenError => 30,
-            ErrorKind::TranscodingError(_) =>31,
-            ErrorKind::EncryptionError(_) =>32,
-
+            ErrorKind::TranscodingError(_) => 31,
+            ErrorKind::EncryptionError(_) => 32,
         };
         ffi_support::ErrorCode::new(code)
     }

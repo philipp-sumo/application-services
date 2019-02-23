@@ -5,10 +5,7 @@ use sql_support::ConnExt;
 
 use push_errors::Result;
 
-use crate::{
-    record::PushRecord,
-    schema,
-};
+use crate::{record::PushRecord, schema};
 
 // TODO: Add broadcasts storage
 
@@ -71,8 +68,7 @@ impl Storage for PushDb {
         );
         Ok(self.try_query_row(
             &query,
-            &[(":uaid", &uaid as &ToSql),
-                (":chid", &chid as &ToSql)],
+            &[(":uaid", &uaid as &ToSql), (":chid", &chid as &ToSql)],
             PushRecord::from_row,
             false,
         )?)
@@ -114,14 +110,16 @@ impl Storage for PushDb {
         let affected_rows = self.execute_named(
             "DELETE FROM push_record
              WHERE uaid = :uaid AND channel_id = :chid",
-            &[(":uaid", &uaid as &ToSql),
-                (":chid", &chid as &ToSql)],
+            &[(":uaid", &uaid as &ToSql), (":chid", &chid as &ToSql)],
         )?;
         Ok(affected_rows == 1)
     }
 
     fn delete_all_records(&self, uaid: &str) -> Result<()> {
-        self.execute_named("DELETE FROM push_record WHERE uaid = :uaid", &[(":uaid", &uaid as &ToSql)])?;
+        self.execute_named(
+            "DELETE FROM push_record WHERE uaid = :uaid",
+            &[(":uaid", &uaid as &ToSql)],
+        )?;
         Ok(())
     }
 
@@ -129,7 +127,7 @@ impl Storage for PushDb {
         self.query_rows_and_then_named(
             "SELECT channel_id FROM push_record WHERE uaid = :uaid",
             &[(":uaid", &uaid as &ToSql)],
-            |row| -> Result<String> { Ok(row.get_checked(0)?) }
+            |row| -> Result<String> { Ok(row.get_checked(0)?) },
         )
     }
 
@@ -149,7 +147,11 @@ impl Storage for PushDb {
     fn update_native_id(&self, uaid: &str, native_id: &str) -> Result<bool> {
         let affected_rows = self.execute_named(
             "UPDATE push_record set native_id = :native_id WHERE uaid = :uaid",
-            &[(":native_id", &native_id.to_owned()), (":uaid", &uaid.to_owned())], )?;
+            &[
+                (":native_id", &native_id.to_owned()),
+                (":uaid", &uaid.to_owned()),
+            ],
+        )?;
         Ok(affected_rows == 1)
     }
 }

@@ -15,8 +15,8 @@ use serde_json::{self, json};
 use config::PushConfiguration;
 use crypto::{self, Cryptography};
 use push_errors::{self, Result};
-use subscriber::PushManager;
 use storage::Storage;
+use subscriber::PushManager;
 
 #[no_mangle]
 pub extern "C" fn push_enable_logcat_logging() {
@@ -73,10 +73,8 @@ pub unsafe extern "C" fn push_connection_new(
         database_path: db_path,
         ..Default::default()
     };
-    MANAGER.insert_with_result(error, || {
-        PushManager::new(config.clone())
-    })
-    }
+    MANAGER.insert_with_result(error, || PushManager::new(config.clone()))
+}
 
 // Add a subscription
 /// Errors are logged.
